@@ -409,6 +409,22 @@
             }
         });
 
+        // Wraps response.json() so a non-JSON response (e.g. Render's own HTML
+        // error page while a free-tier instance is still waking up from sleep)
+        // produces a clear, actionable message instead of a raw SyntaxError.
+        async function parseJsonResponse(response) {
+            const text = await response.text();
+            try {
+                return JSON.parse(text);
+            } catch (e) {
+                throw new Error(
+                    "Server returned an unexpected (non-JSON) response. If this app has " +
+                    "been idle for a while, the free-tier instance may still be waking up " +
+                    "(can take 30-60s) — please wait a moment and try again."
+                );
+            }
+        }
+
         // Upload and demo video calls
         async function uploadFile(file) {
             const formData = new FormData();
@@ -422,7 +438,7 @@
                     method: 'POST',
                     body: formData
                 });
-                const data = await response.json();
+                const data = await parseJsonResponse(response);
                 if(response.ok) {
                     onVideoLoaded(data.filename);
                 } else {
@@ -442,7 +458,7 @@
             
             try {
                 const response = await fetch('/demo', { method: 'POST' });
-                const data = await response.json();
+                const data = await parseJsonResponse(response);
                 if (response.ok) {
                     onVideoLoaded(data.filename);
                 } else {
@@ -487,7 +503,7 @@
             
             try {
                 const response = await fetch('/analyze', { method: 'POST' });
-                const data = await response.json();
+                const data = await parseJsonResponse(response);
                 if (response.ok) {
                     renderHighlights(data.highlights);
                 } else {
@@ -674,7 +690,7 @@
                     })
                 });
                 
-                const data = await response.json();
+                const data = await parseJsonResponse(response);
                 if (response.ok) {
                     updateRenderProgress("Complete!", 100);
                     setTimeout(() => {
