@@ -106,7 +106,7 @@ class HighlightEngine:
         
         try:
             with sr.AudioFile(wav_path) as source:
-                total_duration = source.duration
+                total_duration = source.DURATION
                 # NOTE: record()'s `offset` skips forward from the *current* stream
                 # position, not from the start of the file — passing offset=start on
                 # every loop iteration compounds and desyncs each chunk from its
@@ -243,8 +243,8 @@ class HighlightEngine:
             # (a) Audio Energy Score (0 to 100)
             audio_sub = rms_energy[start:end] if len(rms_energy) >= end else []
             if audio_sub:
-                avg_rms = np.mean(audio_sub)
-                peak_rms = np.max(audio_sub)
+                avg_rms = float(np.mean(audio_sub))
+                peak_rms = float(np.max(audio_sub))
                 # Combined metric of average level and dramatic peaks
                 audio_score = min((avg_rms * 40 + peak_rms * 60) * 100, 100)
             else:
@@ -281,7 +281,7 @@ class HighlightEngine:
             if motion_scores:
                 motion_sub = motion_scores[start:end] if len(motion_scores) >= end else []
                 if motion_sub:
-                    motion_score = min(np.mean(motion_sub) * 10, 100)
+                    motion_score = min(float(np.mean(motion_sub)) * 10, 100)
                 else:
                     motion_score = 50
             else:
@@ -291,7 +291,7 @@ class HighlightEngine:
             # Audio (35%), Speech & Lexical (40%), Motion (15%), Hook Quality (10%)
             # Hook Quality is based on whether it starts with high audio energy
             hook_sub = rms_energy[start:start+3] if len(rms_energy) >= start+3 else []
-            hook_score = min(np.max(hook_sub) * 150, 100) if hook_sub else 50
+            hook_score = min(float(np.max(hook_sub)) * 150, 100) if hook_sub else 50
             
             final_score = (
                 (audio_score * 0.35) + 

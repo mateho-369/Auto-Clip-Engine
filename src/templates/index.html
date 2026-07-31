@@ -618,16 +618,14 @@
             const compliant = chkOwn.checked && chkTransform.checked && chkNoSurprise.checked;
             
             // Loop through all export buttons in the active highlight items
-            if (app_state) {
-                for(let i=0; i<5; i++) {
-                    const btn = document.getElementById(`btn-export-${i}`);
-                    if (btn) {
-                        btn.disabled = !compliant;
-                        if (!compliant) {
-                            btn.title = "Verify compliance checklist to unlock export!";
-                        } else {
-                            btn.removeAttribute('title');
-                        }
+            for(let i=0; i<5; i++) {
+                const btn = document.getElementById(`btn-export-${i}`);
+                if (btn) {
+                    btn.disabled = !compliant;
+                    if (!compliant) {
+                        btn.title = "Verify compliance checklist to unlock export!";
+                    } else {
+                        btn.removeAttribute('title');
                     }
                 }
             }

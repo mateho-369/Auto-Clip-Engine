@@ -41,7 +41,7 @@ async def home():
     return {"message": "Global Highlights Auto-Clip Engine dashboard. Please place index.html in src/templates/"}
 
 @app.post("/upload")
-async def upload_video(file: UploadFile = File(...)):
+def upload_video(file: UploadFile = File(...)):
     """Handles uploading a long-form video file."""
     try:
         # Check file extension
@@ -70,7 +70,7 @@ async def upload_video(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 @app.post("/demo")
-async def load_demo():
+def load_demo():
     """Generates a synthetic demo video instantly if the user doesn't have an upload."""
     demo_path = os.path.join(UPLOAD_DIR, "demo_video.mp4")
     
@@ -181,7 +181,7 @@ async def load_demo():
     }
 
 @app.post("/analyze")
-async def analyze_video():
+def analyze_video():
     """Runs the HighlightEngine to extract viral candidate highlights."""
     video_path = app_state["current_video_path"]
     if not video_path or not os.path.exists(video_path):
@@ -212,7 +212,7 @@ class ExportRequest(BaseModel):
     accent_tld: str = "com"  # com (US), co.uk (UK), ca (Canada)
 
 @app.post("/export")
-async def export_clip(req: ExportRequest):
+def export_clip(req: ExportRequest):
     """
     Renders, crops, styles, adds captions and voiceovers to a selected highlight clip,
     saving the result and returning a file download path.
