@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+python-multipart
+moviepy>=2.0
+gTTS
+SpeechRecognition
+opencv-python-headless
+pydub
+jinja2
+numpy
+pillow

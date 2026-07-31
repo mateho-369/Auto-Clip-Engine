@@ -107,11 +107,16 @@ class HighlightEngine:
         try:
             with sr.AudioFile(wav_path) as source:
                 total_duration = source.duration
-                # Segment audio into smaller chunks for speech recognition
-                for start in range(0, int(total_duration), segment_duration):
+                # NOTE: record()'s `offset` skips forward from the *current* stream
+                # position, not from the start of the file — passing offset=start on
+                # every loop iteration compounds and desyncs each chunk from its
+                # labelled start/end. Instead, read sequentially with duration only,
+                # since AudioFile keeps its own read cursor between record() calls.
+                start = 0
+                while start < total_duration:
                     end = min(start + segment_duration, total_duration)
                     try:
-                        audio_chunk = recognizer.record(source, offset=start, duration=segment_duration)
+                        audio_chunk = recognizer.record(source, duration=segment_duration)
                         text = recognizer.recognize_google(audio_chunk, language="en-US")
                         transcripts.append({
                             "start": start,
@@ -140,6 +145,7 @@ class HighlightEngine:
                             "end": end,
                             "text": ""
                         })
+                    start += segment_duration
             return transcripts
         except Exception as e:
             print(f"Error initializing SpeechRecognition: {e}")

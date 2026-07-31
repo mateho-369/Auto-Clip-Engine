@@ -134,7 +134,7 @@ class VideoCropper:
             print("Combining video with original audio track...")
             with VideoFileClip(input_video_path) as full_video:
                 # Extract the subclip audio
-                audio_subclip = full_video.audio.subclip(start_time, end_time)
+                audio_subclip = full_video.audio.subclipped(start_time, end_time)
                 
                 # Load the cropped silent clip
                 with VideoFileClip(temp_silent_path) as cropped_silent_clip:

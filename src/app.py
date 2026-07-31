@@ -2,7 +2,7 @@ import os
 import shutil
 import uuid
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import HTMLFileResponse, FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -37,9 +37,7 @@ async def home():
     # We will read templates/index.html directly for maximum robustness
     template_path = os.path.join("src", "templates", "index.html")
     if os.path.exists(template_path):
-        with open(template_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        return HTMLFileResponse(template_path)
+        return FileResponse(template_path, media_type="text/html")
     return {"message": "Global Highlights Auto-Clip Engine dashboard. Please place index.html in src/templates/"}
 
 @app.post("/upload")

@@ -48,33 +48,16 @@ class VoiceoverEngine:
                 orig_audio = video.audio
                 
                 if orig_audio is not None:
-                    # Apply volume ducking during voiceover duration
-                    ducked_audio_part = orig_audio.subclip(0, min(voice_dur, video.duration)).multiply_volume(duck_ratio)
-                    
+                    ducked_end = min(voice_dur, video.duration)
+                    # Background is ducked while the narrator speaks, then back to normal volume after
+                    full_bg_ducked = orig_audio.subclipped(0, ducked_end).multiply_volume(duck_ratio)
+                    voice_track_positioned = voiceover_clip.with_start(0)
+
                     if video.duration > voice_dur:
-                        normal_audio_part = orig_audio.subclip(voice_dur, video.duration)
-                        # Composite ducked background audio with the voiceover track
-                        intro_audio = CompositeAudioClip([ducked_audio_part, voiceover_clip])
-                        
-                        # Concatenate/compose full audio stream
-                        # MoviePy composite audio can position tracks relative to each other
-                        voiceover_clip_positioned = voiceover_clip.with_start(0)
-                        ducked_bg_positioned = orig_audio.multiply_volume(duck_ratio).subclip(0, min(voice_dur, video.duration))
-                        
-                        mixed_audio_intro = CompositeAudioClip([ducked_bg_positioned, voiceover_clip_positioned])
-                        
-                        # We can construct the final audio by concatenating or using CompositeAudioClip
-                        # A clean way is composite audio clip:
-                        # voiceover plays from 0 to voice_dur.
-                        # background is ducked from 0 to voice_dur, and then full volume from voice_dur onwards.
-                        # In MoviePy, we can schedule when each track starts.
-                        full_bg_ducked = orig_audio.multiply_volume(duck_ratio).subclip(0, min(voice_dur, video.duration))
-                        full_bg_normal = orig_audio.subclip(min(voice_dur, video.duration), video.duration).with_start(min(voice_dur, video.duration))
-                        voice_track_positioned = voiceover_clip.with_start(0)
-                        
+                        full_bg_normal = orig_audio.subclipped(ducked_end, video.duration).with_start(ducked_end)
                         final_audio = CompositeAudioClip([full_bg_ducked, full_bg_normal, voice_track_positioned])
                     else:
-                        final_audio = CompositeAudioClip([ducked_audio_part, voiceover_clip])
+                        final_audio = CompositeAudioClip([full_bg_ducked, voice_track_positioned])
                 else:
                     final_audio = voiceover_clip
                     
