@@ -137,7 +137,7 @@ def load_demo():
                 cv2.circle(frame, (curr_face_x + 30, face_y - 20), 6, (0, 0, 0), -1) # right pupil
                 
                 # Open mouth that coordinates with the audio (just pulsing size)
-                mouth_height = int(10 + math.sin(time_sec * 8) * 15)
+                mouth_height = max(2, int(10 + math.sin(time_sec * 8) * 15))
                 cv2.ellipse(frame, (curr_face_x, face_y + 30), (25, mouth_height), 0, 0, 180, (0, 0, 255), -1)
                 
                 # Draw overlay title text
