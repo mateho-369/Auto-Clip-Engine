@@ -185,7 +185,7 @@ def analyze_video():
     """Runs the HighlightEngine to extract viral candidate highlights."""
     video_path = app_state["current_video_path"]
     if not video_path or not os.path.exists(video_path):
-        raise HTTPException(status_code=400, detail="No active video loaded. Please upload a video or load the demo.")
+        raise HTTPException(status_code=400, detail="No active video loaded. Please upload a video or load the demo. (If you just did that and still see this, the free-tier server may have restarted — try again.)")
         
     try:
         engine = HighlightEngine(video_path)
@@ -221,7 +221,7 @@ def export_clip(req: ExportRequest):
     highlights = app_state["highlights"]
     
     if not video_path or not os.path.exists(video_path):
-        raise HTTPException(status_code=400, detail="No active video loaded.")
+        raise HTTPException(status_code=400, detail="No active video loaded. This can happen if the server restarted (e.g. free-tier sleep after inactivity, or a redeploy) since your last analysis — the uploaded file and its state don't survive a restart on this plan. Please re-upload your video and click 'Scan for Highlights' again.")
         
     if not highlights or req.clip_index >= len(highlights):
         raise HTTPException(status_code=400, detail="Invalid clip selection index.")
