@@ -1,0 +1,11 @@
+.git
+__pycache__/
+*.pyc
+uploads/
+clips/
+*.mp4
+*.mp3
+*.wav
+.gitignore
+README.md
+PATCH_NOTES.md
