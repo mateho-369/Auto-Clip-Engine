@@ -8,4 +8,4 @@ opencv-python-headless==4.13.0.92
 pydub==0.25.1
 jinja2==3.1.6
 numpy==2.4.4
-pillow==11.3.0
+pillow==10.4.0
