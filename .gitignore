@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+env/
+venv/
+ENV/
+uploads/
+clips/
+temp_*.wav
+temp_*.mp3
+temp_*.mp4
+.DS_Store
+.idea/
+.vscode/

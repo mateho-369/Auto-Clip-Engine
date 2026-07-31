@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Global Highlights — Auto-Clip Engine</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f5f3ff',
+                            100: '#ede9fe',
+                            200: '#ddd6fe',
+                            500: '#8b5cf6',
+                            600: '#7c3aed',
+                            700: '#6d28d9',
+                            900: '#4c1d95',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #1f2937;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #4b5563;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans">
+    <!-- Navigation Bar -->
+    <nav class="border-b border-slate-800 bg-slate-900/60 backdrop-blur-md sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <span class="text-2xl">⚡</span>
+                <span class="text-xl font-extrabold tracking-tight bg-gradient-to-r from-violet-400 to-indigo-400 bg-clip-text text-transparent">
+                    GLOBAL HIGHLIGHTS
+                </span>
+                <span class="bg-violet-900/40 text-violet-300 text-[10px] font-bold px-2 py-0.5 rounded border border-violet-700/50">
+                    AUTO-CLIP v2.0
+                </span>
+            </div>
+            <div class="flex items-center space-x-4">
+                <span class="text-sm text-slate-400">License: Standard Creator</span>
+                <div class="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Workspace Container -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Introduction Header -->
+        <header class="mb-10 text-center md:text-left">
+            <h1 class="text-3xl font-extrabold text-slate-50 tracking-tight sm:text-4xl">
+                Transform Long Videos into High-Impact Shorts
+            </h1>
+            <p class="mt-2 text-lg text-slate-400 max-w-3xl">
+                Automatically detect peak moments, track faces smoothly to 9:16 vertical ratio, 
+                burn karaoke-style captions, and add AI voiceovers—all optimized for YouTube Shorts & Reels.
+            </p>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            
+            <!-- Left Column: Video Input & Control Panels (5 cols) -->
+            <section class="lg:col-span-5 space-y-8">
+                
+                <!-- 1. Source Video Ingest Panel -->
+                <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+                    <div class="absolute top-0 left-0 w-2 h-full bg-brand-500"></div>
+                    <h2 class="text-lg font-bold text-slate-50 flex items-center mb-4">
+                        <span class="mr-2">📥</span> 1. Source Ingest
+                    </h2>
+                    
+                    <!-- File Drag/Upload Area -->
+                    <div class="border-2 border-dashed border-slate-700 hover:border-brand-500 rounded-xl p-6 text-center transition cursor-pointer bg-slate-950" id="drop-area">
+                        <input type="file" id="file-input" class="hidden" accept="video/*">
+                        <div class="space-y-2" id="upload-idle">
+                            <span class="text-4xl">📹</span>
+                            <p class="text-sm font-semibold text-slate-300">Drag your raw video file here</p>
+                            <p class="text-xs text-slate-500">Supports MP4, MOV, MKV up to 500MB</p>
+                            <button class="mt-4 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-xs font-bold rounded-lg transition" onclick="document.getElementById('file-input').click()">
+                                Browse File
+                            </button>
+                        </div>
+                        
+                        <!-- Uploading/Processing State -->
+                        <div class="hidden space-y-4 py-4" id="upload-loading">
+                            <svg class="animate-spin h-8 w-8 text-brand-500 mx-auto" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.11 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <p class="text-sm text-slate-300" id="upload-status-text">Uploading video, please wait...</p>
+                        </div>
+                    </div>
+
+                    <!-- OR Divider / Quick Demo Button -->
+                    <div class="relative flex py-4 items-center">
+                        <div class="flex-grow border-t border-slate-800"></div>
+                        <span class="flex-shrink mx-4 text-xs font-bold text-slate-500">OR TRY DEMO</span>
+                        <div class="flex-grow border-t border-slate-800"></div>
+                    </div>
+                    
+                    <button class="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-xs font-bold rounded-xl transition border border-slate-700 flex items-center justify-center space-x-2" id="btn-demo">
+                        <span>🚀</span>
+                        <span>Load Simulated Demo Video (Instant)</span>
+                    </button>
+                    
+                    <!-- File info banner -->
+                    <div class="hidden mt-4 bg-brand-900/30 border border-brand-700/50 rounded-xl p-3 flex items-center justify-between" id="file-info-banner">
+                        <div class="flex items-center space-x-3 overflow-hidden">
+                            <span class="text-xl">✅</span>
+                            <div class="overflow-hidden">
+                                <p class="text-xs font-bold text-slate-200 truncate" id="video-filename">file_name.mp4</p>
+                                <p class="text-[10px] text-brand-300">Ready for viral analysis</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. Interactive Auto-Edit Customizer -->
+                <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden" id="customizer-panel">
+                    <div class="absolute top-0 left-0 w-2 h-full bg-indigo-500"></div>
+                    <h2 class="text-lg font-bold text-slate-50 flex items-center mb-4">
+                        <span class="mr-2">⚙️</span> 2. Style & Voiceover
+                    </h2>
+                    
+                    <div class="space-y-5 text-sm">
+                        <!-- Toggle: Face Tracking -->
+                        <div class="flex items-center justify-between p-3 bg-slate-950 rounded-xl border border-slate-800">
+                            <div>
+                                <p class="font-bold text-slate-200 text-xs">AI Smart Face-Tracking</p>
+                                <p class="text-[10px] text-slate-500">Smooth moving-average 9:16 vertical crop</p>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="toggle-face-track" checked class="sr-only peer">
+                                <div class="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-300 after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-brand-600"></div>
+                            </label>
+                        </div>
+
+                        <!-- Dropdown: Caption Styles -->
+                        <div>
+                            <label class="block text-xs font-bold text-slate-400 mb-1.5 uppercase">Karaoke Caption Theme</label>
+                            <select id="select-caption-style" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-200 focus:outline-none focus:border-brand-500">
+                                <option value="Reels">🔥 Reels Style (Capitalized, Yellow Highlight, Bold)</option>
+                                <option value="Shorts">⚡ Shorts Style (All-Caps, Big Green Highlight, Punchy)</option>
+                                <option value="Tech">💻 Tech Style (Standard Mix, Outline Shadow, Clean)</option>
+                                <option value="None">❌ No Burn-In Captions (Export SRT Subtitle File Only)</option>
+                            </select>
+                        </div>
+
+                        <!-- Toggle: AI Voiceover Narration -->
+                        <div class="space-y-3">
+                            <div class="flex items-center justify-between p-3 bg-slate-950 rounded-xl border border-slate-800">
+                                <div>
+                                    <p class="font-bold text-slate-200 text-xs">Add AI Hook Narration</p>
+                                    <p class="text-[10px] text-slate-500">Inserts voiceover intro with background music ducking</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="toggle-voiceover" class="sr-only peer">
+                                    <div class="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-300 after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-brand-600"></div>
+                                </label>
+                            </div>
+                            
+                            <!-- Voiceover Setup Form -->
+                            <div class="hidden space-y-3 bg-slate-950 p-4 rounded-xl border border-slate-800/80" id="voiceover-setup">
+                                <div>
+                                    <label class="block text-[11px] font-bold text-slate-400 mb-1">Narrator Accent</label>
+                                    <select id="select-voice-accent" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none">
+                                        <option value="com">🇺🇸 American Narrator (Standard US)</option>
+                                        <option value="co.uk">🇬🇧 British Narrator (Premium UK)</option>
+                                        <option value="ca">🇨🇦 Canadian Narrator (Warm Accent)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-[11px] font-bold text-slate-400 mb-1">Voiceover Script Text</label>
+                                    <textarea id="voiceover-text" rows="2" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-brand-500 resize-none" placeholder="E.g., You won't believe what happens next. Watch till the absolute end!"></textarea>
+                                    <p class="text-[9px] text-slate-500 mt-1">Note: This speech plays at the start of your clip. Background audio is automatically ducked to 25% volume.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. Compliance and Verification Panel (Section 3 Guardrail) -->
+                <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+                    <div class="absolute top-0 left-0 w-2 h-full bg-amber-500"></div>
+                    <h2 class="text-lg font-bold text-slate-50 flex items-center mb-3">
+                        <span class="mr-2">🛡️</span> Compliance Checklist
+                    </h2>
+                    <p class="text-xs text-slate-400 mb-4 leading-relaxed">
+                        To maintain direct monetization eligibility and keep your channels strike-free, verify you comply with platforms' Reused Content Policies before exporting:
+                    </p>
+                    
+                    <div class="space-y-3">
+                        <label class="flex items-start space-x-3 cursor-pointer p-2.5 rounded-xl hover:bg-slate-950 transition">
+                            <input type="checkbox" id="chk-own" class="mt-0.5 rounded text-brand-600 focus:ring-0 bg-slate-850 border-slate-700 h-4 w-4">
+                            <span class="text-xs text-slate-300">
+                                <strong>Footage ownership:</strong> I own this video recording, or I hold a valid commercial usage license.
+                            </span>
+                        </label>
+                        
+                        <label class="flex items-start space-x-3 cursor-pointer p-2.5 rounded-xl hover:bg-slate-950 transition">
+                            <input type="checkbox" id="chk-transform" class="mt-0.5 rounded text-brand-600 focus:ring-0 bg-slate-850 border-slate-700 h-4 w-4">
+                            <span class="text-xs text-slate-300">
+                                <strong>Transformative value:</strong> I am adding commentary, editorializing, narration, or educational formats (not just raw re-hosting).
+                            </span>
+                        </label>
+                        
+                        <label class="flex items-start space-x-3 cursor-pointer p-2.5 rounded-xl hover:bg-slate-950 transition">
+                            <input type="checkbox" id="chk-nosurprise" class="mt-0.5 rounded text-brand-600 focus:ring-0 bg-slate-850 border-slate-700 h-4 w-4">
+                            <span class="text-xs text-slate-300">
+                                <strong>Anti-scraping standard:</strong> This is a rights-permission gated workflow. No third-party copyrights are being infringed.
+                            </span>
+                        </label>
+                    </div>
+                </div>
+
+            </section>
+            
+            <!-- Right Column: Results & Interactive Output (7 cols) -->
+            <section class="lg:col-span-7 space-y-8">
+                
+                <!-- Main Action Button & Highlight Analysis -->
+                <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl" id="analysis-container">
+                    <div class="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
+                        <h2 class="text-xl font-extrabold text-slate-50 flex items-center">
+                            <span class="mr-2.5">🚀</span> AI Highlight Candidates
+                        </h2>
+                        
+                        <button class="px-6 py-3 bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-700 hover:to-indigo-700 text-sm font-bold rounded-xl shadow-lg transition flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed" id="btn-analyze" disabled>
+                            <span>⚡</span>
+                            <span>Scan Video for Highlights</span>
+                        </button>
+                    </div>
+
+                    <!-- No Video Uploaded Placeholder -->
+                    <div class="text-center py-16 border-2 border-dashed border-slate-800 rounded-xl" id="analysis-placeholder">
+                        <span class="text-5xl">🎯</span>
+                        <p class="mt-4 text-sm font-semibold text-slate-400">Please load or upload a source video to extract viral highlights</p>
+                    </div>
+
+                    <!-- Loading Spinner for Analysis -->
+                    <div class="hidden text-center py-16 space-y-4" id="analysis-loading">
+                        <svg class="animate-spin h-10 w-10 text-brand-500 mx-auto" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.11 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <p class="text-sm font-medium text-slate-300">Extracting video, audio, and visual peak moments...</p>
+                        <p class="text-xs text-slate-500">Calculating virality scores using multi-modal hook engine</p>
+                    </div>
+
+                    <!-- List of Highlight Clips -->
+                    <div class="hidden space-y-4 custom-scrollbar max-h-[500px] overflow-y-auto pr-1" id="highlights-list">
+                        <!-- Dynamic items injected here via javascript -->
+                    </div>
+                </div>
+
+                <!-- Live Rendered Preview Output Panel -->
+                <div class="hidden bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl" id="preview-panel">
+                    <h2 class="text-lg font-bold text-slate-50 flex items-center mb-4">
+                        <span class="mr-2">🎬</span> Rendered Export & Download
+                    </h2>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-12 gap-6">
+                        <!-- Video Player Frame -->
+                        <div class="md:col-span-5 flex justify-center bg-slate-950 p-3 rounded-2xl border border-slate-800">
+                            <video id="output-player" controls class="max-h-[350px] w-full rounded-xl aspect-[9/16] bg-black">
+                                <source id="player-src" src="" type="video/mp4">
+                                Your browser does not support the video tag.
+                            </video>
+                        </div>
+                        
+                        <!-- Metadata and Downloads -->
+                        <div class="md:col-span-7 flex flex-col justify-between space-y-4">
+                            <div class="space-y-3">
+                                <span class="bg-emerald-900/40 text-emerald-300 text-xs font-bold px-2.5 py-1 rounded-full border border-emerald-700/50">
+                                    ✨ Render Complete
+                                </span>
+                                <h3 class="text-base font-bold text-slate-100" id="rendered-title">highlight_clip.mp4</h3>
+                                <div class="grid grid-cols-2 gap-2 text-xs bg-slate-950 p-3 rounded-xl border border-slate-850">
+                                    <div class="text-slate-400">Duration: <strong class="text-slate-200" id="rendered-dur">20s</strong></div>
+                                    <div class="text-slate-400">Aspect Ratio: <strong class="text-slate-200">9:16 (Vertical)</strong></div>
+                                    <div class="text-slate-400">Frame Crop: <strong class="text-slate-200">Smooth Tracked</strong></div>
+                                    <div class="text-slate-400">Captions: <strong class="text-slate-200" id="rendered-caps">Burned-In</strong></div>
+                                </div>
+                            </div>
+                            
+                            <div class="space-y-2">
+                                <a id="btn-download-video" href="#" class="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-sm font-bold rounded-xl transition flex items-center justify-center space-x-2 shadow-lg shadow-emerald-900/20">
+                                    <span>📥</span>
+                                    <span>Download Vertical Video (.mp4)</span>
+                                </a>
+                                <a id="btn-download-srt" href="#" class="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-xs font-bold rounded-xl transition flex items-center justify-center space-x-2 border border-slate-700">
+                                    <span>📝</span>
+                                    <span>Download Subtitle File (.srt)</span>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </section>
+        </div>
+    </main>
+
+    <!-- Global Processing Modal (Export Spinner) -->
+    <div class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4" id="export-modal">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-8 max-w-md w-full shadow-2xl text-center space-y-6">
+            <svg class="animate-spin h-14 w-10 text-brand-500 mx-auto" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.11 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <div class="space-y-2">
+                <h3 class="text-lg font-extrabold text-slate-100">Rendering Clip Highlight</h3>
+                <p class="text-xs text-slate-400" id="render-stage">Step 1/3: Running OpenCV Auto-Crop & Smooth Face Tracking...</p>
+                <div class="w-full bg-slate-950 rounded-full h-2 overflow-hidden mt-4">
+                    <div class="bg-gradient-to-r from-brand-500 to-indigo-500 h-full rounded-full transition-all duration-300" id="render-progress-bar" style="width: 15%"></div>
+                </div>
+            </div>
+            <p class="text-[10px] text-slate-500">Processing video frames locally. High quality output results take roughly 15-45 seconds.</p>
+        </div>
+    </div>
+
+    <!-- JavaScript logic -->
+    <script>
+        // State variables
+        let selectedClipIndex = null;
+        let activeVideoLoaded = false;
+        
+        // DOM Elements
+        const dropArea = document.getElementById('drop-area');
+        const fileInput = document.getElementById('file-input');
+        const btnDemo = document.getElementById('btn-demo');
+        const btnAnalyze = document.getElementById('btn-analyze');
+        const fileInfoBanner = document.getElementById('file-info-banner');
+        const videoFilename = document.getElementById('video-filename');
+        const analysisPlaceholder = document.getElementById('analysis-placeholder');
+        const analysisLoading = document.getElementById('analysis-loading');
+        const highlightsList = document.getElementById('highlights-list');
+        const toggleVoiceover = document.getElementById('toggle-voiceover');
+        const voiceoverSetup = document.getElementById('voiceover-setup');
+        
+        // Compliance checkboxes
+        const chkOwn = document.getElementById('chk-own');
+        const chkTransform = document.getElementById('chk-transform');
+        const chkNoSurprise = document.getElementById('chk-nosurprise');
+        
+        // Export UI
+        const exportModal = document.getElementById('export-modal');
+        const renderStage = document.getElementById('render-stage');
+        const renderProgressBar = document.getElementById('render-progress-bar');
+        const previewPanel = document.getElementById('preview-panel');
+        const outputPlayer = document.getElementById('output-player');
+        const playerSrc = document.getElementById('player-src');
+        const renderedTitle = document.getElementById('rendered-title');
+        const renderedDur = document.getElementById('rendered-dur');
+        const renderedCaps = document.getElementById('rendered-caps');
+        const btnDownloadVideo = document.getElementById('btn-download-video');
+        const btnDownloadSrt = document.getElementById('btn-download-srt');
+
+        // Toggle voiceover fields
+        toggleVoiceover.addEventListener('change', () => {
+            if(toggleVoiceover.checked) {
+                voiceoverSetup.classList.remove('hidden');
+            } else {
+                voiceoverSetup.classList.add('hidden');
+            }
+        });
+
+        // Drop Area events
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropArea.addEventListener(eventName, highlight, false);
+        });
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropArea.addEventListener(eventName, unhighlight, false);
+        });
+        function highlight(e) {
+            e.preventDefault();
+            dropArea.classList.add('border-brand-500', 'bg-slate-900');
+        }
+        function unhighlight(e) {
+            e.preventDefault();
+            dropArea.classList.remove('border-brand-500', 'bg-slate-900');
+        }
+        dropArea.addEventListener('drop', handleDrop, false);
+        function handleDrop(e) {
+            let dt = e.dataTransfer;
+            let files = dt.files;
+            if (files.length > 0) {
+                uploadFile(files[0]);
+            }
+        }
+        fileInput.addEventListener('change', (e) => {
+            if (fileInput.files.length > 0) {
+                uploadFile(fileInput.files[0]);
+            }
+        });
+
+        // Upload and demo video calls
+        async function uploadFile(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            document.getElementById('upload-idle').classList.add('hidden');
+            document.getElementById('upload-loading').classList.remove('hidden');
+            
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                if(response.ok) {
+                    onVideoLoaded(data.filename);
+                } else {
+                    alert("Upload error: " + (data.detail || "Unknown error"));
+                    resetUploadZone();
+                }
+            } catch(e) {
+                alert("Upload failed connection: " + e);
+                resetUploadZone();
+            }
+        }
+
+        btnDemo.addEventListener('click', async () => {
+            document.getElementById('upload-idle').classList.add('hidden');
+            document.getElementById('upload-loading').classList.remove('hidden');
+            document.getElementById('upload-status-text').innerText = "Generating synthetic simulation video on backend...";
+            
+            try {
+                const response = await fetch('/demo', { method: 'POST' });
+                const data = await response.json();
+                if (response.ok) {
+                    onVideoLoaded(data.filename);
+                } else {
+                    alert("Demo generation failed: " + data.detail);
+                    resetUploadZone();
+                }
+            } catch(e) {
+                alert("Demo endpoint failed connection: " + e);
+                resetUploadZone();
+            }
+        });
+
+        function resetUploadZone() {
+            document.getElementById('upload-idle').classList.remove('hidden');
+            document.getElementById('upload-loading').classList.add('hidden');
+            document.getElementById('upload-status-text').innerText = "Uploading video, please wait...";
+            fileInfoBanner.classList.add('hidden');
+            activeVideoLoaded = false;
+            btnAnalyze.disabled = true;
+        }
+
+        function onVideoLoaded(filename) {
+            document.getElementById('upload-idle').classList.add('hidden');
+            document.getElementById('upload-loading').classList.add('hidden');
+            fileInfoBanner.classList.remove('hidden');
+            videoFilename.innerText = filename;
+            activeVideoLoaded = true;
+            btnAnalyze.disabled = false;
+            
+            // Show alert/notify
+            analysisPlaceholder.classList.remove('hidden');
+            highlightsList.classList.add('hidden');
+            previewPanel.classList.add('hidden');
+        }
+
+        // Run highlight analysis
+        btnAnalyze.addEventListener('click', async () => {
+            analysisPlaceholder.classList.add('hidden');
+            analysisLoading.classList.remove('hidden');
+            highlightsList.classList.add('hidden');
+            btnAnalyze.disabled = true;
+            
+            try {
+                const response = await fetch('/analyze', { method: 'POST' });
+                const data = await response.json();
+                if (response.ok) {
+                    renderHighlights(data.highlights);
+                } else {
+                    alert("Analysis error: " + data.detail);
+                    analysisPlaceholder.classList.remove('hidden');
+                }
+            } catch (e) {
+                alert("Analysis connection failed: " + e);
+                analysisPlaceholder.classList.remove('hidden');
+            } finally {
+                analysisLoading.classList.add('hidden');
+                btnAnalyze.disabled = false;
+            }
+        });
+
+        function renderHighlights(highlights) {
+            highlightsList.innerHTML = '';
+            
+            if (highlights.length === 0) {
+                highlightsList.innerHTML = `
+                    <div class="text-center py-10 text-slate-400">
+                        No distinct highlight peaks could be extracted. Please try a more active video!
+                    </div>
+                `;
+            } else {
+                highlights.forEach((hl, idx) => {
+                    const card = document.createElement('div');
+                    card.className = `p-5 bg-slate-950 border ${selectedClipIndex === idx ? 'border-brand-500 bg-brand-950/10' : 'border-slate-800'} rounded-xl transition cursor-pointer hover:border-slate-600 space-y-4 relative`;
+                    card.onclick = () => selectClip(idx);
+                    
+                    card.innerHTML = `
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <span class="bg-brand-500/20 text-brand-300 text-[10px] font-bold px-2 py-0.5 rounded-full border border-brand-500/30">
+                                    CLIP #${idx + 1}
+                                </span>
+                                <h3 class="font-bold text-slate-100 text-sm mt-1.5">${hl.hook_title}</h3>
+                                <p class="text-xs text-slate-400 mt-1">🕒 Range: <strong class="text-slate-300">${formatSec(hl.start)} - ${formatSec(hl.end)}</strong> (20s)</p>
+                            </div>
+                            <div class="text-right">
+                                <div class="text-xl font-black bg-gradient-to-r from-violet-400 to-indigo-400 bg-clip-text text-transparent">${hl.score}%</div>
+                                <p class="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Virality Score</p>
+                            </div>
+                        </div>
+                        
+                        <div class="p-3 bg-slate-900/60 rounded-lg text-xs italic text-slate-300 border border-slate-850/50 leading-relaxed">
+                            "${hl.text}"
+                        </div>
+                        
+                        <!-- Breakdown Progress Bars -->
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 text-[10px] border-t border-slate-900">
+                            <div>
+                                <div class="flex justify-between text-slate-500 mb-0.5">
+                                    <span>🔊 Audio Energy</span>
+                                    <span>${hl.breakdown.audio_energy}%</span>
+                                </div>
+                                <div class="w-full bg-slate-900 rounded-full h-1"><div class="bg-violet-500 h-1 rounded-full" style="width: ${hl.breakdown.audio_energy}%"></div></div>
+                            </div>
+                            <div>
+                                <div class="flex justify-between text-slate-500 mb-0.5">
+                                    <span>✍️ Lexical Hook</span>
+                                    <span>${hl.breakdown.lexical_virality}%</span>
+                                </div>
+                                <div class="w-full bg-slate-900 rounded-full h-1"><div class="bg-pink-500 h-1 rounded-full" style="width: ${hl.breakdown.lexical_virality}%"></div></div>
+                            </div>
+                            <div>
+                                <div class="flex justify-between text-slate-500 mb-0.5">
+                                    <span>🏃 Visual Motion</span>
+                                    <span>${hl.breakdown.visual_motion}%</span>
+                                </div>
+                                <div class="w-full bg-slate-900 rounded-full h-1"><div class="bg-blue-500 h-1 rounded-full" style="width: ${hl.breakdown.visual_motion}%"></div></div>
+                            </div>
+                            <div>
+                                <div class="flex justify-between text-slate-500 mb-0.5">
+                                    <span>🎯 Hook Strength</span>
+                                    <span>${hl.breakdown.hook_strength}%</span>
+                                </div>
+                                <div class="w-full bg-slate-900 rounded-full h-1"><div class="bg-amber-500 h-1 rounded-full" style="width: ${hl.breakdown.hook_strength}%"></div></div>
+                            </div>
+                        </div>
+
+                        <!-- Export Actions (Visible only when selected) -->
+                        <div class="hidden mt-4 pt-3 border-t border-slate-900 flex justify-end" id="action-area-${idx}">
+                            <button class="px-5 py-2.5 bg-brand-600 hover:bg-brand-700 text-xs font-extrabold rounded-xl transition flex items-center space-x-1.5 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed" id="btn-export-${idx}" onclick="exportSelectedClip(event, ${idx})">
+                                <span>🎨</span>
+                                <span>Render & Crop Clip</span>
+                            </button>
+                        </div>
+                    `;
+                    highlightsList.appendChild(card);
+                });
+            }
+            highlightsList.classList.remove('hidden');
+        }
+
+        function formatSec(seconds) {
+            const m = Math.floor(seconds / 60);
+            const s = Math.floor(seconds % 60);
+            return `${m}:${s < 10 ? '0' : ''}${s}`;
+        }
+
+        function selectClip(idx) {
+            // Unselect previous
+            const cards = highlightsList.children;
+            for(let i=0; i<cards.length; i++) {
+                cards[i].classList.remove('border-brand-500', 'bg-brand-950/10');
+                cards[i].classList.add('border-slate-800');
+                const actions = document.getElementById(`action-area-${i}`);
+                if (actions) actions.classList.add('hidden');
+            }
+            
+            selectedClipIndex = idx;
+            cards[idx].classList.remove('border-slate-800');
+            cards[idx].classList.add('border-brand-500', 'bg-brand-950/10');
+            
+            const selectedActions = document.getElementById(`action-area-${idx}`);
+            if (selectedActions) selectedActions.classList.remove('hidden');
+            
+            updateExportButtonsState();
+        }
+
+        // Observe compliance checkboxes to toggle the export buttons
+        [chkOwn, chkTransform, chkNoSurprise].forEach(chk => {
+            chk.addEventListener('change', updateExportButtonsState);
+        });
+
+        function updateExportButtonsState() {
+            const compliant = chkOwn.checked && chkTransform.checked && chkNoSurprise.checked;
+            
+            // Loop through all export buttons in the active highlight items
+            if (app_state) {
+                for(let i=0; i<5; i++) {
+                    const btn = document.getElementById(`btn-export-${i}`);
+                    if (btn) {
+                        btn.disabled = !compliant;
+                        if (!compliant) {
+                            btn.title = "Verify compliance checklist to unlock export!";
+                        } else {
+                            btn.removeAttribute('title');
+                        }
+                    }
+                }
+            }
+        }
+
+        async function exportSelectedClip(event, idx) {
+            // Prevent event bubbling to card selection
+            event.stopPropagation();
+            
+            const compliant = chkOwn.checked && chkTransform.checked && chkNoSurprise.checked;
+            if(!compliant) {
+                alert("Please agree to all compliance checkboxes before exporting video material.");
+                return;
+            }
+
+            // Open progress modal
+            exportModal.classList.remove('hidden');
+            updateRenderProgress("Step 1/3: Running OpenCV Auto-Crop & Smooth Face Tracking...", 20);
+            
+            const trackFaces = document.getElementById('toggle-face-track').checked;
+            const captionStyle = document.getElementById('select-caption-style').value;
+            const enableVoiceover = document.getElementById('toggle-voiceover').checked;
+            const voiceoverText = document.getElementById('voiceover-text').value;
+            const voiceAccent = document.getElementById('select-voice-accent').value;
+
+            // Trigger simulated transition on rendering dialog
+            setTimeout(() => {
+                updateRenderProgress("Step 2/3: Applying voiceover & mixing audio tracks with volume ducking...", 50);
+            }, 8000);
+            
+            setTimeout(() => {
+                updateRenderProgress("Step 3/3: Running word timing estimators and burning animated subtitles...", 80);
+            }, 18000);
+
+            try {
+                const response = await fetch('/export', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        clip_index: idx,
+                        track_faces: trackFaces,
+                        caption_style: captionStyle,
+                        enable_voiceover: enableVoiceover,
+                        voiceover_text: voiceoverText,
+                        accent_tld: voiceAccent
+                    })
+                });
+                
+                const data = await response.json();
+                if (response.ok) {
+                    updateRenderProgress("Complete!", 100);
+                    setTimeout(() => {
+                        exportModal.classList.add('hidden');
+                        showRenderedPreview(data);
+                    }, 500);
+                } else {
+                    alert("Export failure: " + data.detail);
+                    exportModal.classList.add('hidden');
+                }
+            } catch(e) {
+                alert("Export network timeout or error: " + e);
+                exportModal.classList.add('hidden');
+            }
+        }
+
+        function updateRenderProgress(stageText, percentage) {
+            renderStage.innerText = stageText;
+            renderProgressBar.style.width = `${percentage}%`;
+        }
+
+        function showRenderedPreview(data) {
+            renderedTitle.innerText = data.clip_filename;
+            renderedDur.innerText = `${Math.round(data.duration)}s`;
+            renderedCaps.innerText = document.getElementById('select-caption-style').options[document.getElementById('select-caption-style').selectedIndex].text.split(' ')[1] || "Active";
+            
+            // Reload video player sources
+            playerSrc.src = data.download_url;
+            outputPlayer.load();
+            
+            btnDownloadVideo.href = data.download_url;
+            btnDownloadSrt.href = data.srt_url;
+            
+            previewPanel.classList.remove('hidden');
+            previewPanel.scrollIntoView({ behavior: 'smooth' });
+        }
+    </script>
+</body>
+</html>
