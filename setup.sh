@@ -86,7 +86,7 @@ fi
 
 echo -e "${BLUE}Activating venv and installing pinned dependencies...${NC}"
 ./venv/bin/pip install --upgrade pip
-./venv/bin/pip install -r requirements.txt
+./venv/bin/pip install -r requirements-dev.txt
 
 echo -e "${GREEN}✔ Dependencies installed successfully in virtual environment!${NC}\n"
 

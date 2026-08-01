@@ -30,11 +30,22 @@ def create_dummy_video(filename, duration_sec=2, fps=24, width=640, height=360):
         out.write(frame)
     out.release()
     
-    # Generate simple test voiceover using gTTS
-    from gtts import gTTS
-    temp_audio = "temp_test_audio.mp3"
-    tts = gTTS(text="This is a test speech clip.", lang="en")
-    tts.save(temp_audio)
+    # Generate a simple synthesized tone locally for the audio track — no
+    # network dependency needed here, we just need *some* non-silent audio
+    # to verify the crop pipeline preserves an audio track correctly.
+    import wave
+    import struct
+    import math
+    temp_audio = "temp_test_audio.wav"
+    sample_rate = 22050
+    n_samples = sample_rate * duration_sec
+    with wave.open(temp_audio, "w") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        for i in range(n_samples):
+            value = int(8000 * math.sin(2 * math.pi * 440 * (i / sample_rate)))
+            wf.writeframesraw(struct.pack("<h", value))
     
     # Combine them using MoviePy
     with VideoFileClip(temp_silent) as video_clip:
