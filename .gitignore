@@ -14,3 +14,7 @@ temp_*.mp4
 .DS_Store
 .idea/
 .vscode/
+.cache/
+*.onnx
+*.bin
+*.tflite

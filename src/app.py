@@ -66,6 +66,8 @@ def upload_video(file: UploadFile = File(...)):
             "filename": file.filename,
             "saved_path": dest_path
         }
+    except HTTPException as he:
+        raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
@@ -202,6 +204,8 @@ def analyze_video(req: AnalyzeRequest):
             "duration": engine.duration,
             "highlights": highlights
         }
+    except HTTPException as he:
+        raise he
     except Exception as e:
          raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
