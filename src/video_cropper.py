@@ -5,11 +5,14 @@ from moviepy import VideoFileClip
 
 class VideoCropper:
     def __init__(self, face_cascade_path=None, tflite_model_path="blaze_face_short_range.tflite"):
-        # Setup Haar Cascade path
+        # Setup Haar Cascade path — bundled directly in the repo. cv2.data.haarcascades
+        # points to a real directory, but the actual XML file is missing from the
+        # opencv-contrib-python package (confirmed empirically), so relying on it
+        # silently breaks the fallback. Ship our own copy instead.
         if face_cascade_path is None:
-            self.face_cascade_path = os.path.join(
-                cv2.data.haarcascades, 'haarcascade_frontalface_default.xml'
-            )
+            bundled_path = os.path.join(os.path.dirname(__file__), 'haarcascade_frontalface_default.xml')
+            cv2_data_path = os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
+            self.face_cascade_path = bundled_path if os.path.exists(bundled_path) else cv2_data_path
         else:
             self.face_cascade_path = face_cascade_path
             
