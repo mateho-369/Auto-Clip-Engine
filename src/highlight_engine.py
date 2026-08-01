@@ -147,13 +147,19 @@ class HighlightEngine:
             print(f"Error initializing SpeechRecognition: {e}")
             return []
 
-    def transcribe_with_faster_whisper(self, wav_path, whisper_model="tiny"):
-        """Transcribes the entire audio file using local faster-whisper model."""
+    def transcribe_with_faster_whisper(self, wav_path, whisper_model="small"):
+        """Transcribes the entire audio file using local faster-whisper model.
+        Tries GPU (CUDA) first for speed, falls back to CPU automatically if
+        no compatible GPU/cuDNN is available."""
         print(f"Running local faster-whisper ({whisper_model})...")
         try:
             from faster_whisper import WhisperModel
-            # Initialize model on CPU
-            model = WhisperModel(whisper_model, device="cpu", compute_type="int8")
+            try:
+                model = WhisperModel(whisper_model, device="cuda", compute_type="float16")
+                print("faster-whisper running on GPU (CUDA).")
+            except Exception as gpu_err:
+                print(f"GPU unavailable for faster-whisper ({gpu_err}), using CPU instead.")
+                model = WhisperModel(whisper_model, device="cpu", compute_type="int8")
             segments, info = model.transcribe(wav_path, beam_size=5)
             
             transcripts = []
@@ -291,7 +297,7 @@ class HighlightEngine:
                 cand["breakdown"]["llm_semantic_score"] = 0.0
 
     def detect_highlights(self, min_clip_duration=15, max_clip_duration=30, top_n=5, 
-                          use_whisper=True, whisper_model="tiny", 
+                          use_whisper=True, whisper_model="small", 
                           use_ollama=False, ollama_model="llama3.2:3b", ollama_host="http://localhost:11434"):
         """
         Combines audio energy, motion detection, speech rate, and optional local LLM analysis (Ollama)
