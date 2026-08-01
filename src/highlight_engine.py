@@ -1,8 +1,11 @@
 import os
 import wave
+import json
+import re
+import urllib.request
 import numpy as np
 import speech_recognition as sr
-from moviepy import VideoFileClip, AudioFileClip
+from moviepy import VideoFileClip
 import cv2
 
 class HighlightEngine:
@@ -89,14 +92,14 @@ class HighlightEngine:
                 for i in range(num_chunks):
                     chunk = audio_data[i * chunk_size : (i + 1) * chunk_size]
                     rms = np.sqrt(np.mean(chunk**2))
-                    rms_values.append(rms)
+                    rms_values.append(float(rms)) # Cast numpy float to native float
                     
                 return rms_values
         except Exception as e:
             print(f"Error analyzing audio energy: {e}")
             return []
 
-    def transcribe_audio_segments(self, wav_path, segment_duration=10):
+    def transcribe_audio_segments(self, wav_path, segment_duration=15):
         """Transcribes the audio in chunks using SpeechRecognition."""
         if not os.path.exists(wav_path):
             return []
@@ -107,11 +110,6 @@ class HighlightEngine:
         try:
             with sr.AudioFile(wav_path) as source:
                 total_duration = source.DURATION
-                # NOTE: record()'s `offset` skips forward from the *current* stream
-                # position, not from the start of the file — passing offset=start on
-                # every loop iteration compounds and desyncs each chunk from its
-                # labelled start/end. Instead, read sequentially with duration only,
-                # since AudioFile keeps its own read cursor between record() calls.
                 start = 0
                 while start < total_duration:
                     end = min(start + segment_duration, total_duration)
@@ -119,30 +117,28 @@ class HighlightEngine:
                         audio_chunk = recognizer.record(source, duration=segment_duration)
                         text = recognizer.recognize_google(audio_chunk, language="en-US")
                         transcripts.append({
-                            "start": start,
-                            "end": end,
+                            "start": float(start),
+                            "end": float(end),
                             "text": text
                         })
                     except sr.UnknownValueError:
-                        # Speech was unintelligible
                         transcripts.append({
-                            "start": start,
-                            "end": end,
+                            "start": float(start),
+                            "end": float(end),
                             "text": ""
                         })
                     except sr.RequestError as e:
                         print(f"Google speech API request failed: {e}")
-                        # Network issue or quota, append empty string
                         transcripts.append({
-                            "start": start,
-                            "end": end,
+                            "start": float(start),
+                            "end": float(end),
                             "text": ""
                         })
                     except Exception as e:
                         print(f"Transcription chunk error: {e}")
                         transcripts.append({
-                            "start": start,
-                            "end": end,
+                            "start": float(start),
+                            "end": float(end),
                             "text": ""
                         })
                     start += segment_duration
@@ -150,6 +146,28 @@ class HighlightEngine:
         except Exception as e:
             print(f"Error initializing SpeechRecognition: {e}")
             return []
+
+    def transcribe_with_faster_whisper(self, wav_path, whisper_model="tiny"):
+        """Transcribes the entire audio file using local faster-whisper model."""
+        print(f"Running local faster-whisper ({whisper_model})...")
+        try:
+            from faster_whisper import WhisperModel
+            # Initialize model on CPU
+            model = WhisperModel(whisper_model, device="cpu", compute_type="int8")
+            segments, info = model.transcribe(wav_path, beam_size=5)
+            
+            transcripts = []
+            for s in segments:
+                transcripts.append({
+                    "start": float(s.start),
+                    "end": float(s.end),
+                    "text": s.text.strip()
+                })
+            print("Local faster-whisper transcription complete!")
+            return transcripts
+        except Exception as e:
+            print(f"faster-whisper local model error: {e}. Falling back to SpeechRecognition API.")
+            return self.transcribe_audio_segments(wav_path, segment_duration=15)
 
     def analyze_visual_motion(self, max_frames_to_check=500):
         """Computes average frame-to-frame motion score of the video."""
@@ -178,7 +196,7 @@ class HighlightEngine:
                 # Compute absolute difference between frames
                 diff = cv2.absdiff(gray, prev_gray)
                 mean_diff = np.mean(diff)
-                motion_scores.append(float(mean_diff))
+                motion_scores.append(float(mean_diff)) # Cast to float
                 
                 prev_gray = gray
                 frame_count += 1
@@ -189,12 +207,97 @@ class HighlightEngine:
             print(f"Error in visual analysis: {e}")
             return []
 
-    def detect_highlights(self, min_clip_duration=15, max_clip_duration=30, top_n=5):
+    def score_highlights_via_ollama(self, candidates, ollama_host="http://localhost:11434", ollama_model="llama3.2:3b"):
         """
-        Combines audio, lexical, and motion signals to detect viral highlights.
-        Returns a sorted list of dictionaries representing ranked highlight candidates.
+        Sends the top highlight candidates to a local Ollama instance for semantic virality analysis.
+        Integrates seamlessly and degrades gracefully if Ollama is offline.
         """
-        print("Starting Highlight Detection Pipeline...")
+        print(f"Connecting to Ollama model '{ollama_model}' on {ollama_host}...")
+        
+        # Prepare the candidates to be sent to Ollama
+        simplified_candidates = [
+            {
+                "index": i,
+                "start": cand["start"],
+                "end": cand["end"],
+                "text": cand["text"]
+            }
+            for i, cand in enumerate(candidates)
+        ]
+        
+        # Craft prompt requesting strict JSON response
+        prompt = (
+            "You are a viral social media editor. Analyze the transcript segments of this video "
+            "and assign a 'semantic_score' between 0 and 100 based on humor, hook potential, insight, "
+            "and suitability for TikTok/Shorts. Provide a short 'reason' for each.\n\n"
+            f"Candidates JSON:\n{json.dumps(simplified_candidates, indent=2)}\n\n"
+            "Respond ONLY with a valid JSON array of objects, each containing exact keys: 'index' (int), "
+            "'semantic_score' (int), and 'reason' (string). Do not output any introductory or concluding text."
+        )
+        
+        url = f"{ollama_host}/api/generate"
+        payload = {
+            "model": ollama_model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "temperature": 0.2
+            }
+        }
+        
+        try:
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=8) as response:
+                resp_data = json.loads(response.read().decode("utf-8"))
+                response_text = resp_data.get("response", "").strip()
+                
+                # Attempt to extract JSON array out of response text in case model added markdown wrapping
+                json_match = re.search(r"\[\s*\{.*\}\s*\]", response_text, re.DOTALL)
+                if json_match:
+                    response_text = json_match.group(0)
+                    
+                ollama_scores = json.loads(response_text)
+                
+                # Build lookup
+                scores_lookup = {item["index"]: item for item in ollama_scores}
+                
+                # Blend the local heuristic score with the LLM semantic score (40% heuristic, 60% LLM semantic)
+                for i, cand in enumerate(candidates):
+                    if i in scores_lookup:
+                        semantic_info = scores_lookup[i]
+                        sem_score = float(semantic_info.get("semantic_score", cand["score"]))
+                        reason = semantic_info.get("reason", "Ollama compiled rating")
+                        
+                        # Blended scoring
+                        blended_score = round((cand["score"] * 0.4) + (sem_score * 0.6), 2)
+                        cand["score"] = blended_score
+                        cand["hook_title"] = f"★ {cand['hook_title']}"
+                        cand["explanation"] = reason
+                        cand["breakdown"]["llm_semantic_score"] = sem_score
+                        print(f"  - Clip #{i+1} Ollama re-score: {cand['score']}% (Reason: {reason})")
+                    else:
+                        cand["explanation"] = "Ollama ranking skipped (Index mismatch)"
+                        cand["breakdown"]["llm_semantic_score"] = cand["score"]
+                        
+            print("Ollama semantic pass completed successfully!")
+        except Exception as e:
+            print(f"Ollama integration warning/offline: {e}. Gracefully falling back to heuristic-only scoring.")
+            for cand in candidates:
+                cand["explanation"] = "Local Ollama offline. Heuristic fallback active."
+                cand["breakdown"]["llm_semantic_score"] = 0.0
+
+    def detect_highlights(self, min_clip_duration=15, max_clip_duration=30, top_n=5, 
+                          use_whisper=True, whisper_model="tiny", 
+                          use_ollama=False, ollama_model="llama3.2:3b", ollama_host="http://localhost:11434"):
+        """
+        Combines audio energy, motion detection, speech rate, and optional local LLM analysis (Ollama)
+        to identify and rank high-virality highlights.
+        """
+        print("Starting Local-Upgraded Highlight Detection Pipeline...")
         
         # 1. Extract audio
         temp_wav = "temp_extraction.wav"
@@ -208,8 +311,10 @@ class HighlightEngine:
         # 3. Get speech transcripts
         transcripts = []
         if audio_extracted:
-            print("Running Speech Recognition...")
-            transcripts = self.transcribe_audio_segments(temp_wav, segment_duration=15)
+            if use_whisper:
+                transcripts = self.transcribe_with_faster_whisper(temp_wav, whisper_model=whisper_model)
+            else:
+                transcripts = self.transcribe_audio_segments(temp_wav, segment_duration=15)
             
         # 4. Get motion scores
         motion_scores = self.analyze_visual_motion()
@@ -222,12 +327,10 @@ class HighlightEngine:
                 pass
 
         # 5. Generate candidates and calculate scores
-        # We search with sliding window of length 20 seconds, step 10 seconds
         candidates = []
         step = 10
         window_size = 20
         
-        # Virality keywords for lexical scoring
         virality_words = {
             "wow", "crazy", "unbelievable", "amazing", "shocker", "funny", "secret",
             "look", "insane", "hacks", "omg", "lol", "wait", "epic", "huge", "never",
@@ -245,14 +348,13 @@ class HighlightEngine:
             if audio_sub:
                 avg_rms = float(np.mean(audio_sub))
                 peak_rms = float(np.max(audio_sub))
-                # Combined metric of average level and dramatic peaks
                 audio_score = min((avg_rms * 40 + peak_rms * 60) * 100, 100)
             else:
-                audio_score = 50 # Fallback
+                audio_score = 50
                 
             # (b) Lexical & Speech Score (0 to 100)
             segment_text = ""
-            speech_rate = 0 # Words per second
+            speech_rate = 0
             lexical_score = 0
             
             # Find transcripts that overlap with this window
@@ -266,18 +368,15 @@ class HighlightEngine:
             if segment_text:
                 words = segment_text.lower().split()
                 speech_rate = len(words) / window_size
-                # Score based on speech density (faster speech is usually more energetic)
-                density_score = min((speech_rate / 3.0) * 100, 100) # 3 words/sec is high density
+                density_score = min((speech_rate / 3.0) * 100, 100)
                 
-                # Check for virality words
                 matched_words = [w for w in words if w in virality_words]
                 word_score = min(len(matched_words) * 20, 100)
                 lexical_score = (density_score * 0.4) + (word_score * 0.6)
             else:
-                lexical_score = 40 # Standard conversational fallback score
+                lexical_score = 40
                 
             # (c) Visual Motion Score (0 to 100)
-            # Map start/end to frame-based motion list
             if motion_scores:
                 motion_sub = motion_scores[start:end] if len(motion_scores) >= end else []
                 if motion_sub:
@@ -287,9 +386,7 @@ class HighlightEngine:
             else:
                 motion_score = 50
                 
-            # (d) Combined Weighted Virality Score
-            # Audio (35%), Speech & Lexical (40%), Motion (15%), Hook Quality (10%)
-            # Hook Quality is based on whether it starts with high audio energy
+            # (d) Hook Quality (0 to 100)
             hook_sub = rms_energy[start:start+3] if len(rms_energy) >= start+3 else []
             hook_score = min(float(np.max(hook_sub)) * 150, 100) if hook_sub else 50
             
@@ -300,11 +397,8 @@ class HighlightEngine:
                 (hook_score * 0.10)
             )
             
-            # Ensure it's bounded [0, 100] and clean
             final_score = round(float(final_score), 2)
             
-            # Hook description/summary
-            # Select first few words as potential title/hook text
             words_list = segment_text.split()
             if len(words_list) >= 4:
                 hook_title = " ".join(words_list[:4]) + "..."
@@ -317,6 +411,7 @@ class HighlightEngine:
                 "score": final_score,
                 "text": segment_text if segment_text else "[No dialogue detected]",
                 "hook_title": hook_title,
+                "explanation": "Heuristic scoring mode active.",
                 "breakdown": {
                     "audio_energy": round(audio_score, 1),
                     "lexical_virality": round(lexical_score, 1),
@@ -325,26 +420,30 @@ class HighlightEngine:
                 }
             })
             
-        # 6. Deduplicate candidates (remove highly overlapping windows)
+        # 6. Deduplicate candidates
         candidates = sorted(candidates, key=lambda x: x["score"], reverse=True)
         unique_highlights = []
         
         for cand in candidates:
-            # Check if this candidate overlaps too much with already accepted highlights
             overlap = False
             for accepted in unique_highlights:
-                # Calculate intersection of intervals [start, end]
                 intersect_start = max(cand["start"], accepted["start"])
                 intersect_end = min(cand["end"], accepted["end"])
                 if intersect_end > intersect_start:
-                    # Overlap duration
                     overlap_dur = intersect_end - intersect_start
-                    # If overlap is more than 30% of the candidate's duration
                     if overlap_dur / window_size > 0.30:
                         overlap = True
                         break
             if not overlap:
                 unique_highlights.append(cand)
                 
-        # Return top N
-        return unique_highlights[:top_n]
+        top_candidates = unique_highlights[:top_n]
+        
+        # 7. Apply optional local Ollama semantic re-ranking pass on top candidates
+        if use_ollama and len(top_candidates) > 0:
+            self.score_highlights_via_ollama(top_candidates, ollama_host=ollama_host, ollama_model=ollama_model)
+            
+        # Sort again since score was updated by Ollama
+        top_candidates = sorted(top_candidates, key=lambda x: x["score"], reverse=True)
+        
+        return top_candidates

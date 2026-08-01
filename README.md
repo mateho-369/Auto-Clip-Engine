@@ -1,51 +1,50 @@
-# ⚡ Global Highlights: Auto-Clip Engine
+# ⚡ Global Highlights: Local Auto-Clip Engine (v2.0)
 
-Global Highlights is an advanced, autonomous AI clipping engine that transforms long-form landscape videos (16:9) into viral, professional 9:16 vertical shorts optimized for YouTube Shorts, Instagram Reels, and Facebook Reels.
+Global Highlights is an advanced, workstation-grade local clipping engine that transforms long-form landscape videos (16:9) into viral, professional 9:16 vertical shorts optimized for YouTube Shorts, Instagram Reels, and Facebook Reels.
 
-It runs completely locally, featuring a beautiful Tailwind CSS-powered dashboard, automatic face-tracking, dual-layer animated captions, and high-quality narrator voiceover overlay with intelligent audio ducking.
-
----
-
-## 🛠️ System Stack & Final Decision
-
-### 1. Highlight/Virality Detection
-- **Our Selection:** Multi-Modal Sound Peak & Motion Analysis + Lexical Scoring Framework.
-- **Why:** Full local execution without GPU/VRAM limits, identifying laughing spikes, exclamation triggers, and high visual action density.
-
-### 2. Speech-to-Text / Captioning
-- **Our Selection:** `SpeechRecognition` (Google Web Speech API / PocketSphinx fallback) + Dynamic Word Duration Interpolator + OpenCV Dual-Layer Caption Burn-In.
-- **Why:** Outperforms heavy PyTorch models (Whisper) that trigger out-of-disk/memory crashes in lightweight cloud or sandbox environments, while delivering a robust, responsive karaoke-style subtitle engine.
-
-### 3. Open-Source Text-to-Speech (TTS)
-- **Our Selection:** `gTTS` (Google Text-to-Speech) with multi-accent support (US, UK, CA).
-- **Why:** Light, Apache-2.0 licensed, highly reliable, and provides professional-grade commentary tracks without VRAM requirements.
-
-### 4. Auto Vertical-Crop / Face-Tracking
-- **Our Selection:** OpenCV Haar Cascade Frontal Face Detector + Exponential Moving Average (EMA) Motion Smoothing.
-- **Why:** Eliminates the jerky camera jumps of simple box-cropping, offering a buttery smooth "cinematic slide/glide" that continuously follows the speaker.
+This is **v2.0**, upgraded for private, high-performance offline environments with local transcription, deep semantic AI analysis, advanced face tracking, and premium voice synthesis.
 
 ---
 
-## ⚙️ How the Highlight Ranking Engine Works
+## 🛠️ Workstation-Grade System Stack
 
-The virality index is calculated dynamically for 20-second sliding windows using a **multi-signal weighted average**:
+### 1. Semantic Highlight Detection (Local LLM Re-Ranking)
+- **Our Selection:** Multi-Modal Peak Signal Analysis + **Ollama Llama 3.2 (3B)** Semantic Evaluation.
+- **How it works:** Candidates are generated via heuristic signal peaks, then the top performing segments are evaluated semantically by Llama 3.2 running on your local machine to score humor, insights, and structural hooks. Blended score combines physical audio peaks (40%) and semantic wisdom (60%).
+- **Graceful Fallback:** If Ollama is offline or uninstalled, the app automatically switches to high-fidelity local heuristic evaluation without crashing.
 
-$$\text{Virality Score} = 0.35 \times A_e + 0.40 \times L_h + 0.15 \times V_m + 0.10 \times H_s$$
+### 2. High-Accuracy Transcription (Local Offline Whisper)
+- **Our Selection:** `faster-whisper` (utilizing a local `tiny` or `base` CTranslate2 model on CPU).
+- **Why:** 100% offline, zero cloud rate-limits, and near-perfect segment/word alignment. Degrades gracefully to Google SpeechRecognition if model files are corrupted or unavailable.
 
-Where:
-- **Audio Energy ($A_e$ - 35%):** Measures Root Mean Square (RMS) spikes indicating punchlines, jokes, shouts, or dramatic commentary.
-- **Lexical/Speech Hook ($L_h$ - 40%):** Scores word density and searches for high-impact hook terms (`wow`, `crazy`, `unbelievable`, `omg`, `secrets`, etc.).
-- **Visual Motion ($V_m$ - 15%):** Analyzes frame-to-frame grid differentials to prioritize active sequences over static, silent slides.
-- **Hook Strength ($H_s$ - 10%):** Assesses audio intensity in the first 3 seconds of the clip to ensure a high-retention thumbnail/start.
+### 3. Premium Voiceover (Local Kokoro-82M TTS)
+- **Our Selection:** `kokoro-onnx` (small, Apache-2.0, CPU-friendly) using `blaze_face` or premium model voices (`af_bella`, `am_adam`, `bf_emma`, `bm_george`).
+- **Why:** Incredible human-like tone, 100% private. Ducking engine dims background video audio to 25% while the narrator speaks. Fallback defaults to `gTTS`.
 
-Overlapping candidate intervals are deduplicated using a greedy algorithm: whenever two intervals overlap by more than 30%, only the higher-scoring interval is retained.
+### 4. Advanced Crop Tracking (MediaPipe Local Face Detection)
+- **Our Selection:** MediaPipe Tasks FaceDetector (`blaze_face_short_range.tflite`) + Exponential Moving Average (EMA) Motion Smoothing.
+- **Why:** High precision face tracking. If face tracking is momentarily obscured, the system falls back to Haar Cascades, and drifts back gracefully toward center (Cinematic Glide) rather than jumping.
 
 ---
 
-## 🚀 Step-by-Step Setup & Running Guide
+## ⚙️ How the Blended Highlight Ranking Works
+
+The virality index is calculated dynamically for 20-second sliding windows:
+
+$$\text{Heuristic Score} = 0.35 \times A_e + 0.40 \times L_h + 0.15 \times V_m + 0.10 \times H_s$$
+
+If Ollama is active, the final rating is computed as:
+
+$$\text{Final Blended Score} = 0.40 \times \text{Heuristic Score} + 0.60 \times \text{Ollama Semantic Score}$$
+
+- **Ollama Semantic Score ($S_{ollama}$):** Evaluation of humor, irony, insight, and storytelling flow.
+
+---
+
+## 🚀 Step-by-Step Local Setup & Running Guide
 
 ### 1. Install System Dependencies
-Make sure you have `ffmpeg` and `ffprobe` installed on your machine.
+Make sure you have `ffmpeg` and `ffprobe` on your system.
 ```bash
 # On Ubuntu/Debian
 sudo apt update && sudo apt install -y ffmpeg
@@ -54,39 +53,47 @@ sudo apt update && sudo apt install -y ffmpeg
 brew install ffmpeg
 ```
 
-### 2. Install Python Packages
+### 2. Set Up Local Ollama (Required for Semantic AI Pass)
+1. Download Ollama from [ollama.com](https://ollama.com).
+2. Pull the default 3B model in your terminal:
+   ```bash
+   ollama pull llama3.2:3b
+   ```
+3. Make sure the Ollama server is running in the background (default: `http://localhost:11434`).
+
+### 3. Download Offline Model Files (Optional, for Premium Offline TTS)
+To use local Kokoro TTS and MediaPipe face tracking:
 ```bash
-pip install fastapi uvicorn moviepy gTTS SpeechRecognition opencv-python pydub jinja2 numpy pillow
+# Download the MediaPipe face detector model
+curl -L -o blaze_face_short_range.tflite https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite
+
+# Download Kokoro ONNX model and voices (if you want premium Kokoro TTS)
+curl -L -o kokoro-v0_19.onnx https://github.com/thewhpoly/kokoro-onnx/releases/download/v0.2.0/kokoro-v0_19.onnx
+curl -L -o voices.bin https://github.com/thewhpoly/kokoro-onnx/releases/download/v0.2.0/voices.bin
 ```
 
-### 3. Start the Web App
+### 4. Install Python Packages
+```bash
+pip install -r requirements.txt
+```
+
+### 5. Start the Web App
 ```bash
 python3 -m uvicorn src.app:app --host 0.0.0.0 --port 8000 --reload
 ```
-Once started, navigate to `http://localhost:8000` in your web browser.
+Once started, navigate to **`http://localhost:8000`** in your browser.
 
 ---
 
-## 🔀 Swapping Components Later
+## 🖥️ Live Polling & Concurrency
 
-### To Swap in `faster-whisper` (Local Whisper):
-1. Install faster-whisper: `pip install faster-whisper`
-2. Update `src/highlight_engine.py` to initialize the model:
-```python
-from faster_whisper import WhisperModel
-model = WhisperModel("base", device="cpu", compute_type="int8")
-```
-3. Use `model.transcribe()` to retrieve precise word-by-word timestamps instead of the duration estimator.
-
-### To Swap in `Kokoro-82M` or `XTTS-v2` for voice cloning:
-1. Install Kokoro: `pip install kokoro-onnx` or install XTTS-v2 via `tts`.
-2. Update the `generate_voiceover_mp3` method in `src/voiceover_engine.py` to point to the local Kokoro ONNX model and generate realistic cloned voiceover tracks!
+The export pipeline runs on an asynchronous background threadpool. When you click **Render & Crop Clip**, the frontend receives a `job_id` and polls `/export/status/{job_id}` every second. This gives you **real-time precise progress indicators** showing exactly what frame and rendering stage the CPU is processing.
 
 ---
 
 ## 🛡️ Monetization & Compliance (Section 3 Guardrails)
 
-YouTube and Facebook enforce strict rules against raw compilation channels (e.g. funny fail channels made from re-uploaded clips).
+YouTube and Facebook enforce strict rules against raw compilation channels.
 This engine features an **in-app Compliance Checklist** that remains locked until the creator verifies:
 1. **Ownership/Licensing:** User represents they own the raw footage or hold a clear commercial license.
 2. **Transformative Value:** The engine applies animated dynamic captions, smart vertical crops, and customizable AI voiceovers, ensuring editorial/format transformation that complies with monetization policies.

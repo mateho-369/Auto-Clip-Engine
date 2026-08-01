@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Global Highlights — Auto-Clip Engine</title>
+    <title>Global Highlights — Local Auto-Clip Engine</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -49,11 +49,11 @@
                     GLOBAL HIGHLIGHTS
                 </span>
                 <span class="bg-violet-900/40 text-violet-300 text-[10px] font-bold px-2 py-0.5 rounded border border-violet-700/50">
-                    AUTO-CLIP v2.0
+                    LOCAL ENGINE v2.0
                 </span>
             </div>
             <div class="flex items-center space-x-4">
-                <span class="text-sm text-slate-400">License: Standard Creator</span>
+                <span class="text-sm text-slate-400">Environment: Local Workstation</span>
                 <div class="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></div>
             </div>
         </div>
@@ -62,60 +62,115 @@
     <!-- Main Workspace Container -->
     <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <!-- Introduction Header -->
-        <header class="mb-10 text-center md:text-left">
-            <h1 class="text-3xl font-extrabold text-slate-50 tracking-tight sm:text-4xl">
-                Transform Long Videos into High-Impact Shorts
-            </h1>
-            <p class="mt-2 text-lg text-slate-400 max-w-3xl">
-                Automatically detect peak moments, track faces smoothly to 9:16 vertical ratio, 
-                burn karaoke-style captions, and add AI voiceovers—all optimized for YouTube Shorts & Reels.
-            </p>
+        <header class="mb-8 text-center md:text-left flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-900 pb-6">
+            <div>
+                <h1 class="text-3xl font-extrabold text-slate-50 tracking-tight sm:text-4xl">
+                    Global Highlights Local Engine
+                </h1>
+                <p class="mt-2 text-sm text-slate-400 max-w-3xl">
+                    Upgraded with local faster-whisper transcription, MediaPipe Face Tracking, 
+                    local Kokoro-82M Text-to-Speech narration, and semantic LLM re-ranking via Ollama.
+                </p>
+            </div>
+            <div class="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-xs space-y-1 text-slate-400 w-full md:w-auto">
+                <div>🖥️ RAM: <strong class="text-slate-200">Local Standard</strong></div>
+                <div>📦 Whisper Model: <strong class="text-slate-200">Local tiny (CPU-optimized)</strong></div>
+            </div>
         </header>
 
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
             
-            <!-- Left Column: Video Input & Control Panels (5 cols) -->
-            <section class="lg:col-span-5 space-y-8">
+            <!-- Left Column: Video Input, Local Settings & Customizers (5 cols) -->
+            <section class="lg:col-span-5 space-y-6">
+                
+                <!-- 0. Local Engine Settings Panel -->
+                <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+                    <div class="absolute top-0 left-0 w-2 h-full bg-teal-500"></div>
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-base font-extrabold text-slate-50 flex items-center">
+                            <span class="mr-2">⚙️</span> Local AI Model Settings
+                        </h2>
+                        <span class="text-[10px] bg-slate-950 px-2 py-0.5 rounded text-slate-400 font-mono">CONFIG</span>
+                    </div>
+                    
+                    <div class="space-y-4 text-xs">
+                        <!-- Transcription Selector -->
+                        <div>
+                            <label class="block font-bold text-slate-400 mb-1">Local Transcription Engine</label>
+                            <select id="setting-transcribe-engine" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-slate-200 focus:outline-none">
+                                <option value="whisper-tiny">Local faster-whisper (tiny model) [Fastest & Private]</option>
+                                <option value="whisper-base">Local faster-whisper (base model) [High Precision]</option>
+                                <option value="google">Google Cloud SpeechRecognition API [Fallback]</option>
+                            </select>
+                        </div>
+
+                        <!-- Ollama Integration -->
+                        <div class="p-3.5 bg-slate-950 rounded-xl border border-slate-800/80 space-y-3">
+                            <div class="flex items-center justify-between">
+                                <span class="font-bold text-slate-200">Semantic LLM Pass (Ollama)</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="setting-use-ollama" class="sr-only peer">
+                                    <div class="w-8 h-4 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-300 after:border-slate-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-brand-600"></div>
+                                </label>
+                            </div>
+                            
+                            <div class="hidden space-y-2.5 pt-2 border-t border-slate-900" id="ollama-config-sub">
+                                <div class="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label class="block text-[10px] text-slate-500 mb-1 font-bold">Ollama Model</label>
+                                        <input type="text" id="setting-ollama-model" value="llama3.2:3b" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-slate-200 focus:outline-none font-mono">
+                                    </div>
+                                    <div>
+                                        <label class="block text-[10px] text-slate-500 mb-1 font-bold">Ollama Host</label>
+                                        <input type="text" id="setting-ollama-host" value="http://localhost:11434" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-slate-200 focus:outline-none font-mono">
+                                    </div>
+                                </div>
+                                <p class="text-[9px] text-slate-500 leading-normal">
+                                    Uses Ollama to evaluate candidate humor & virality. Runs sequentially in the background. Degrades gracefully if Ollama is offline.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 
                 <!-- 1. Source Video Ingest Panel -->
                 <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
                     <div class="absolute top-0 left-0 w-2 h-full bg-brand-500"></div>
-                    <h2 class="text-lg font-bold text-slate-50 flex items-center mb-4">
-                        <span class="mr-2">📥</span> 1. Source Ingest
+                    <h2 class="text-base font-extrabold text-slate-50 flex items-center mb-4">
+                        <span class="mr-2">📥</span> 1. Source Video Ingest
                     </h2>
                     
-                    <!-- File Drag/Upload Area -->
                     <div class="border-2 border-dashed border-slate-700 hover:border-brand-500 rounded-xl p-6 text-center transition cursor-pointer bg-slate-950" id="drop-area">
                         <input type="file" id="file-input" class="hidden" accept="video/*">
                         <div class="space-y-2" id="upload-idle">
                             <span class="text-4xl">📹</span>
-                            <p class="text-sm font-semibold text-slate-300">Drag your raw video file here</p>
-                            <p class="text-xs text-slate-500">Supports MP4, MOV, MKV up to 500MB</p>
-                            <button class="mt-4 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-xs font-bold rounded-lg transition" onclick="document.getElementById('file-input').click()">
-                                Browse File
+                            <p class="text-xs font-semibold text-slate-300">Drag your raw video file here</p>
+                            <p class="text-[10px] text-slate-500">Fast local upload — up to 1GB</p>
+                            <button class="mt-3 px-3.5 py-1.5 bg-brand-600 hover:bg-brand-700 text-[11px] font-bold rounded-lg transition" onclick="document.getElementById('file-input').click()">
+                                Select File
                             </button>
                         </div>
                         
                         <!-- Uploading/Processing State -->
                         <div class="hidden space-y-4 py-4" id="upload-loading">
-                            <svg class="animate-spin h-8 w-8 text-brand-500 mx-auto" fill="none" viewBox="0 0 24 24">
+                            <svg class="animate-spin h-7 w-7 text-brand-500 mx-auto" fill="none" viewBox="0 0 24 24">
                                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.11 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
-                            <p class="text-sm text-slate-300" id="upload-status-text">Uploading video, please wait...</p>
+                            <p class="text-xs text-slate-300" id="upload-status-text">Ingesting local video...</p>
                         </div>
                     </div>
 
-                    <!-- OR Divider / Quick Demo Button -->
-                    <div class="relative flex py-4 items-center">
+                    <!-- Demo Video -->
+                    <div class="relative flex py-3.5 items-center">
                         <div class="flex-grow border-t border-slate-800"></div>
-                        <span class="flex-shrink mx-4 text-xs font-bold text-slate-500">OR TRY DEMO</span>
+                        <span class="flex-shrink mx-3 text-[10px] font-bold text-slate-500">OR RUN TEST DEMO</span>
                         <div class="flex-grow border-t border-slate-800"></div>
                     </div>
                     
-                    <button class="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-xs font-bold rounded-xl transition border border-slate-700 flex items-center justify-center space-x-2" id="btn-demo">
+                    <button class="w-full py-2 bg-slate-850 hover:bg-slate-800 text-[11px] font-bold rounded-xl transition border border-slate-700 flex items-center justify-center space-x-2" id="btn-demo">
                         <span>🚀</span>
-                        <span>Load Simulated Demo Video (Instant)</span>
+                        <span>Generate Demo Video (100% Offline)</span>
                     </button>
                     
                     <!-- File info banner -->
@@ -124,25 +179,25 @@
                             <span class="text-xl">✅</span>
                             <div class="overflow-hidden">
                                 <p class="text-xs font-bold text-slate-200 truncate" id="video-filename">file_name.mp4</p>
-                                <p class="text-[10px] text-brand-300">Ready for viral analysis</p>
+                                <p class="text-[10px] text-brand-300">Video imported locally</p>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- 2. Interactive Auto-Edit Customizer -->
+                <!-- 2. Style, Voiceover & Tracking Customizer -->
                 <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden" id="customizer-panel">
                     <div class="absolute top-0 left-0 w-2 h-full bg-indigo-500"></div>
-                    <h2 class="text-lg font-bold text-slate-50 flex items-center mb-4">
-                        <span class="mr-2">⚙️</span> 2. Style & Voiceover
+                    <h2 class="text-base font-extrabold text-slate-50 flex items-center mb-4">
+                        <span class="mr-2">✨</span> 2. Style, Voiceover & Crop
                     </h2>
                     
-                    <div class="space-y-5 text-sm">
-                        <!-- Toggle: Face Tracking -->
+                    <div class="space-y-4 text-xs">
+                        <!-- MediaPipe Face Tracking -->
                         <div class="flex items-center justify-between p-3 bg-slate-950 rounded-xl border border-slate-800">
                             <div>
                                 <p class="font-bold text-slate-200 text-xs">AI Smart Face-Tracking</p>
-                                <p class="text-[10px] text-slate-500">Smooth moving-average 9:16 vertical crop</p>
+                                <p class="text-[10px] text-slate-500">MediaPipe Tasks + Haar Cascade fallback</p>
                             </div>
                             <label class="relative inline-flex items-center cursor-pointer">
                                 <input type="checkbox" id="toggle-face-track" checked class="sr-only peer">
@@ -152,7 +207,7 @@
 
                         <!-- Dropdown: Caption Styles -->
                         <div>
-                            <label class="block text-xs font-bold text-slate-400 mb-1.5 uppercase">Karaoke Caption Theme</label>
+                            <label class="block font-bold text-slate-400 mb-1.5 uppercase">Karaoke Caption Theme</label>
                             <select id="select-caption-style" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-200 focus:outline-none focus:border-brand-500">
                                 <option value="Reels">🔥 Reels Style (Capitalized, Yellow Highlight, Bold)</option>
                                 <option value="Shorts">⚡ Shorts Style (All-Caps, Big Green Highlight, Punchy)</option>
@@ -176,18 +231,36 @@
                             
                             <!-- Voiceover Setup Form -->
                             <div class="hidden space-y-3 bg-slate-950 p-4 rounded-xl border border-slate-800/80" id="voiceover-setup">
-                                <div>
-                                    <label class="block text-[11px] font-bold text-slate-400 mb-1">Narrator Accent</label>
+                                <div class="flex items-center justify-between p-1 bg-slate-900 rounded-lg">
+                                    <span class="text-[10px] text-slate-400 font-bold ml-1">Use Local Premium TTS (Kokoro)</span>
+                                    <label class="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" id="toggle-use-kokoro" class="sr-only peer">
+                                        <div class="w-7 h-4 bg-slate-850 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-400 after:border-slate-400 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-brand-600"></div>
+                                    </label>
+                                </div>
+
+                                <div id="accent-selector-div">
+                                    <label class="block text-[10px] font-bold text-slate-400 mb-1">Standard gTTS Accent</label>
                                     <select id="select-voice-accent" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none">
                                         <option value="com">🇺🇸 American Narrator (Standard US)</option>
                                         <option value="co.uk">🇬🇧 British Narrator (Premium UK)</option>
                                         <option value="ca">🇨🇦 Canadian Narrator (Warm Accent)</option>
                                     </select>
                                 </div>
+
+                                <div class="hidden" id="kokoro-voice-selector-div">
+                                    <label class="block text-[10px] font-bold text-slate-400 mb-1">Kokoro Premium Offline Voice</label>
+                                    <select id="select-kokoro-voice" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none">
+                                        <option value="af_bella">🇺🇸 af_bella (US Female - Soft & Clear)</option>
+                                        <option value="am_adam">🇺🇸 am_adam (US Male - Professional)</option>
+                                        <option value="bf_emma">🇬🇧 bf_emma (UK Female - Academic)</option>
+                                        <option value="bm_george">🇬🇧 bm_george (UK Male - Authoritative)</option>
+                                    </select>
+                                </div>
+
                                 <div>
-                                    <label class="block text-[11px] font-bold text-slate-400 mb-1">Voiceover Script Text</label>
-                                    <textarea id="voiceover-text" rows="2" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-brand-500 resize-none" placeholder="E.g., You won't believe what happens next. Watch till the absolute end!"></textarea>
-                                    <p class="text-[9px] text-slate-500 mt-1">Note: This speech plays at the start of your clip. Background audio is automatically ducked to 25% volume.</p>
+                                    <label class="block text-[10px] font-bold text-slate-400 mb-1">Voiceover Script Text</label>
+                                    <textarea id="voiceover-text" rows="2" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-brand-500 resize-none" placeholder="E.g., Wait for this hilarious moment... you won't believe what happens!"></textarea>
                                 </div>
                             </div>
                         </div>
@@ -197,32 +270,29 @@
                 <!-- 3. Compliance and Verification Panel (Section 3 Guardrail) -->
                 <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
                     <div class="absolute top-0 left-0 w-2 h-full bg-amber-500"></div>
-                    <h2 class="text-lg font-bold text-slate-50 flex items-center mb-3">
+                    <h2 class="text-base font-extrabold text-slate-50 flex items-center mb-3">
                         <span class="mr-2">🛡️</span> Compliance Checklist
                     </h2>
-                    <p class="text-xs text-slate-400 mb-4 leading-relaxed">
-                        To maintain direct monetization eligibility and keep your channels strike-free, verify you comply with platforms' Reused Content Policies before exporting:
-                    </p>
                     
-                    <div class="space-y-3">
-                        <label class="flex items-start space-x-3 cursor-pointer p-2.5 rounded-xl hover:bg-slate-950 transition">
+                    <div class="space-y-2.5 text-xs text-slate-400">
+                        <label class="flex items-start space-x-2.5 cursor-pointer p-2 rounded-xl hover:bg-slate-950 transition">
                             <input type="checkbox" id="chk-own" class="mt-0.5 rounded text-brand-600 focus:ring-0 bg-slate-850 border-slate-700 h-4 w-4">
-                            <span class="text-xs text-slate-300">
-                                <strong>Footage ownership:</strong> I own this video recording, or I hold a valid commercial usage license.
+                            <span>
+                                <strong>Footage ownership:</strong> I own this recording or hold valid commercial license rights.
                             </span>
                         </label>
                         
-                        <label class="flex items-start space-x-3 cursor-pointer p-2.5 rounded-xl hover:bg-slate-950 transition">
+                        <label class="flex items-start space-x-2.5 cursor-pointer p-2 rounded-xl hover:bg-slate-950 transition">
                             <input type="checkbox" id="chk-transform" class="mt-0.5 rounded text-brand-600 focus:ring-0 bg-slate-850 border-slate-700 h-4 w-4">
-                            <span class="text-xs text-slate-300">
-                                <strong>Transformative value:</strong> I am adding commentary, editorializing, narration, or educational formats (not just raw re-hosting).
+                            <span>
+                                <strong>Transformative value:</strong> I am adding commentary, captions, narration, or educational formats.
                             </span>
                         </label>
                         
-                        <label class="flex items-start space-x-3 cursor-pointer p-2.5 rounded-xl hover:bg-slate-950 transition">
+                        <label class="flex items-start space-x-2.5 cursor-pointer p-2 rounded-xl hover:bg-slate-950 transition">
                             <input type="checkbox" id="chk-nosurprise" class="mt-0.5 rounded text-brand-600 focus:ring-0 bg-slate-850 border-slate-700 h-4 w-4">
-                            <span class="text-xs text-slate-300">
-                                <strong>Anti-scraping standard:</strong> This is a rights-permission gated workflow. No third-party copyrights are being infringed.
+                            <span>
+                                <strong>Anti-scraping standard:</strong> Rights-gated ingest. No third-party copyright claims apply.
                             </span>
                         </label>
                     </div>
@@ -247,19 +317,19 @@
                     </div>
 
                     <!-- No Video Uploaded Placeholder -->
-                    <div class="text-center py-16 border-2 border-dashed border-slate-800 rounded-xl" id="analysis-placeholder">
+                    <div class="text-center py-16 border-2 border-dashed border-slate-800 rounded-xl animate-pulse" id="analysis-placeholder">
                         <span class="text-5xl">🎯</span>
-                        <p class="mt-4 text-sm font-semibold text-slate-400">Please load or upload a source video to extract viral highlights</p>
+                        <p class="mt-4 text-xs font-semibold text-slate-400">Please upload a source video to extract viral highlights</p>
                     </div>
 
                     <!-- Loading Spinner for Analysis -->
-                    <div class="hidden text-center py-16 space-y-4" id="analysis-loading">
+                    <div class="hidden text-center py-16 space-y-4 animate-bounce" id="analysis-loading">
                         <svg class="animate-spin h-10 w-10 text-brand-500 mx-auto" fill="none" viewBox="0 0 24 24">
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.11 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        <p class="text-sm font-medium text-slate-300">Extracting video, audio, and visual peak moments...</p>
-                        <p class="text-xs text-slate-500">Calculating virality scores using multi-modal hook engine</p>
+                        <p class="text-sm font-bold text-slate-300">Extracting video, audio, and visual peak moments...</p>
+                        <p class="text-xs text-slate-500" id="analysis-subtext">Executing local faster-whisper transcription & multi-modal evaluation</p>
                     </div>
 
                     <!-- List of Highlight Clips -->
@@ -286,24 +356,24 @@
                         <!-- Metadata and Downloads -->
                         <div class="md:col-span-7 flex flex-col justify-between space-y-4">
                             <div class="space-y-3">
-                                <span class="bg-emerald-900/40 text-emerald-300 text-xs font-bold px-2.5 py-1 rounded-full border border-emerald-700/50">
+                                <span class="bg-emerald-900/40 text-emerald-300 text-xs font-bold px-2.5 py-1 rounded-full border border-emerald-700/50 inline-block">
                                     ✨ Render Complete
                                 </span>
-                                <h3 class="text-base font-bold text-slate-100" id="rendered-title">highlight_clip.mp4</h3>
-                                <div class="grid grid-cols-2 gap-2 text-xs bg-slate-950 p-3 rounded-xl border border-slate-850">
+                                <h3 class="text-sm font-bold text-slate-100 truncate" id="rendered-title">highlight_clip.mp4</h3>
+                                <div class="grid grid-cols-2 gap-2 text-[10px] bg-slate-950 p-3 rounded-xl border border-slate-850">
                                     <div class="text-slate-400">Duration: <strong class="text-slate-200" id="rendered-dur">20s</strong></div>
                                     <div class="text-slate-400">Aspect Ratio: <strong class="text-slate-200">9:16 (Vertical)</strong></div>
-                                    <div class="text-slate-400">Frame Crop: <strong class="text-slate-200">Smooth Tracked</strong></div>
-                                    <div class="text-slate-400">Captions: <strong class="text-slate-200" id="rendered-caps">Burned-In</strong></div>
+                                    <div class="text-slate-400">Crop: <strong class="text-slate-200">MediaPipe Local</strong></div>
+                                    <div class="text-slate-400">Subtitles: <strong class="text-slate-200">Burned & SRT</strong></div>
                                 </div>
                             </div>
                             
                             <div class="space-y-2">
-                                <a id="btn-download-video" href="#" class="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-sm font-bold rounded-xl transition flex items-center justify-center space-x-2 shadow-lg shadow-emerald-900/20">
+                                <a id="btn-download-video" href="#" class="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-xs font-bold rounded-xl transition flex items-center justify-center space-x-2 shadow-lg shadow-emerald-900/20">
                                     <span>📥</span>
                                     <span>Download Vertical Video (.mp4)</span>
                                 </a>
-                                <a id="btn-download-srt" href="#" class="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-xs font-bold rounded-xl transition flex items-center justify-center space-x-2 border border-slate-700">
+                                <a id="btn-download-srt" href="#" class="w-full py-2 bg-slate-800 hover:bg-slate-700 text-[10px] font-bold rounded-xl transition flex items-center justify-center space-x-2 border border-slate-700">
                                     <span>📝</span>
                                     <span>Download Subtitle File (.srt)</span>
                                 </a>
@@ -316,7 +386,7 @@
         </div>
     </main>
 
-    <!-- Global Processing Modal (Export Spinner) -->
+    <!-- Global Processing Modal (Polled Progress Spinner) -->
     <div class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4" id="export-modal">
         <div class="bg-slate-900 border border-slate-800 rounded-2xl p-8 max-w-md w-full shadow-2xl text-center space-y-6">
             <svg class="animate-spin h-14 w-10 text-brand-500 mx-auto" fill="none" viewBox="0 0 24 24">
@@ -325,12 +395,13 @@
             </svg>
             <div class="space-y-2">
                 <h3 class="text-lg font-extrabold text-slate-100">Rendering Clip Highlight</h3>
-                <p class="text-xs text-slate-400" id="render-stage">Step 1/3: Running OpenCV Auto-Crop & Smooth Face Tracking...</p>
-                <div class="w-full bg-slate-950 rounded-full h-2 overflow-hidden mt-4">
-                    <div class="bg-gradient-to-r from-brand-500 to-indigo-500 h-full rounded-full transition-all duration-300" id="render-progress-bar" style="width: 15%"></div>
+                <p class="text-xs text-slate-400 font-semibold" id="render-stage">Step 1/3: Running Face-Tracking...</p>
+                <div class="w-full bg-slate-950 rounded-full h-2.5 overflow-hidden mt-4">
+                    <div class="bg-gradient-to-r from-brand-500 to-indigo-500 h-full rounded-full transition-all duration-300" id="render-progress-bar" style="width: 0%"></div>
                 </div>
+                <div class="text-[10px] text-right text-brand-300 font-mono font-bold mt-1" id="render-progress-percent">0%</div>
             </div>
-            <p class="text-[10px] text-slate-500">Processing video frames locally. High quality output results take roughly 15-45 seconds.</p>
+            <p class="text-[9px] text-slate-500">Processing video frames locally on CPU. Rendering takes roughly 15-40 seconds.</p>
         </div>
     </div>
 
@@ -339,6 +410,7 @@
         // State variables
         let selectedClipIndex = null;
         let activeVideoLoaded = false;
+        let activeHighlights = [];
         
         // DOM Elements
         const dropArea = document.getElementById('drop-area');
@@ -349,10 +421,17 @@
         const videoFilename = document.getElementById('video-filename');
         const analysisPlaceholder = document.getElementById('analysis-placeholder');
         const analysisLoading = document.getElementById('analysis-loading');
+        const analysisSubtext = document.getElementById('analysis-subtext');
         const highlightsList = document.getElementById('highlights-list');
         const toggleVoiceover = document.getElementById('toggle-voiceover');
         const voiceoverSetup = document.getElementById('voiceover-setup');
         
+        const settingUseOllama = document.getElementById('setting-use-ollama');
+        const ollamaConfigSub = document.getElementById('ollama-config-sub');
+        const toggleUseKokoro = document.getElementById('toggle-use-kokoro');
+        const accentSelectorDiv = document.getElementById('accent-selector-div');
+        const kokoroVoiceSelectorDiv = document.getElementById('kokoro-voice-selector-div');
+
         // Compliance checkboxes
         const chkOwn = document.getElementById('chk-own');
         const chkTransform = document.getElementById('chk-transform');
@@ -362,6 +441,7 @@
         const exportModal = document.getElementById('export-modal');
         const renderStage = document.getElementById('render-stage');
         const renderProgressBar = document.getElementById('render-progress-bar');
+        const renderProgressPercent = document.getElementById('render-progress-percent');
         const previewPanel = document.getElementById('preview-panel');
         const outputPlayer = document.getElementById('output-player');
         const playerSrc = document.getElementById('player-src');
@@ -371,7 +451,36 @@
         const btnDownloadVideo = document.getElementById('btn-download-video');
         const btnDownloadSrt = document.getElementById('btn-download-srt');
 
-        // Toggle voiceover fields
+        // Helper to handle both JSON and potential non-JSON HTML proxy errors
+        async function parseJsonResponse(response) {
+            const text = await response.text();
+            try {
+                return JSON.parse(text);
+            } catch(e) {
+                console.error("Failed to parse JSON body:", text);
+                throw new Error("Server returned non-JSON response. It may be initializing or restarting, please wait and try again.");
+            }
+        }
+
+        // Setting toggle handlers
+        settingUseOllama.addEventListener('change', () => {
+            if(settingUseOllama.checked) {
+                ollamaConfigSub.classList.remove('hidden');
+            } else {
+                ollamaConfigSub.classList.add('hidden');
+            }
+        });
+
+        toggleUseKokoro.addEventListener('change', () => {
+            if(toggleUseKokoro.checked) {
+                kokoroVoiceSelectorDiv.classList.remove('hidden');
+                accentSelectorDiv.classList.add('hidden');
+            } else {
+                kokoroVoiceSelectorDiv.classList.add('hidden');
+                accentSelectorDiv.classList.remove('hidden');
+            }
+        });
+
         toggleVoiceover.addEventListener('change', () => {
             if(toggleVoiceover.checked) {
                 voiceoverSetup.classList.remove('hidden');
@@ -380,7 +489,7 @@
             }
         });
 
-        // Drop Area events
+        // Drag & Drop Zone Actions
         ['dragenter', 'dragover'].forEach(eventName => {
             dropArea.addEventListener(eventName, highlight, false);
         });
@@ -403,29 +512,12 @@
                 uploadFile(files[0]);
             }
         }
-        fileInput.addEventListener('change', (e) => {
+        fileInput.addEventListener('change', () => {
             if (fileInput.files.length > 0) {
                 uploadFile(fileInput.files[0]);
             }
         });
 
-        // Wraps response.json() so a non-JSON response (e.g. Render's own HTML
-        // error page while a free-tier instance is still waking up from sleep)
-        // produces a clear, actionable message instead of a raw SyntaxError.
-        async function parseJsonResponse(response) {
-            const text = await response.text();
-            try {
-                return JSON.parse(text);
-            } catch (e) {
-                throw new Error(
-                    "Server returned an unexpected (non-JSON) response. If this app has " +
-                    "been idle for a while, the free-tier instance may still be waking up " +
-                    "(can take 30-60s) — please wait a moment and try again."
-                );
-            }
-        }
-
-        // Upload and demo video calls
         async function uploadFile(file) {
             const formData = new FormData();
             formData.append('file', file);
@@ -446,7 +538,7 @@
                     resetUploadZone();
                 }
             } catch(e) {
-                alert("Upload failed connection: " + e);
+                alert("Upload failed connection: " + e.message);
                 resetUploadZone();
             }
         }
@@ -466,7 +558,7 @@
                     resetUploadZone();
                 }
             } catch(e) {
-                alert("Demo endpoint failed connection: " + e);
+                alert("Demo endpoint failed: " + e.message);
                 resetUploadZone();
             }
         });
@@ -474,7 +566,7 @@
         function resetUploadZone() {
             document.getElementById('upload-idle').classList.remove('hidden');
             document.getElementById('upload-loading').classList.add('hidden');
-            document.getElementById('upload-status-text').innerText = "Uploading video, please wait...";
+            document.getElementById('upload-status-text').innerText = "Ingesting local video...";
             fileInfoBanner.classList.add('hidden');
             activeVideoLoaded = false;
             btnAnalyze.disabled = true;
@@ -488,7 +580,6 @@
             activeVideoLoaded = true;
             btnAnalyze.disabled = false;
             
-            // Show alert/notify
             analysisPlaceholder.classList.remove('hidden');
             highlightsList.classList.add('hidden');
             previewPanel.classList.add('hidden');
@@ -501,17 +592,45 @@
             highlightsList.classList.add('hidden');
             btnAnalyze.disabled = true;
             
+            // Collect selected Settings
+            const transcribeEngine = document.getElementById('setting-transcribe-engine').value;
+            const useWhisper = transcribeEngine.startsWith("whisper");
+            const whisperModel = useWhisper ? transcribeEngine.split("-")[1] : "tiny";
+            const useOllama = settingUseOllama.checked;
+            const ollamaModel = document.getElementById('setting-ollama-model').value;
+            const ollamaHost = document.getElementById('setting-ollama-host').value;
+
+            if (useWhisper) {
+                analysisSubtext.innerText = `Loading local faster-whisper (${whisperModel}) and running transcription...`;
+            } else {
+                analysisSubtext.innerText = "Transcribing speech sequentially via Google SpeechRecognition API...";
+            }
+            if (useOllama) {
+                analysisSubtext.innerText += " and checking Ollama semantic re-ranking pass...";
+            }
+
             try {
-                const response = await fetch('/analyze', { method: 'POST' });
+                const response = await fetch('/analyze', { 
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        use_whisper: useWhisper,
+                        whisper_model: whisperModel,
+                        use_ollama: useOllama,
+                        ollama_model: ollamaModel,
+                        ollama_host: ollamaHost
+                    })
+                });
                 const data = await parseJsonResponse(response);
                 if (response.ok) {
+                    activeHighlights = data.highlights;
                     renderHighlights(data.highlights);
                 } else {
                     alert("Analysis error: " + data.detail);
                     analysisPlaceholder.classList.remove('hidden');
                 }
             } catch (e) {
-                alert("Analysis connection failed: " + e);
+                alert("Analysis connection failed: " + e.message);
                 analysisPlaceholder.classList.remove('hidden');
             } finally {
                 analysisLoading.classList.add('hidden');
@@ -534,6 +653,8 @@
                     card.className = `p-5 bg-slate-950 border ${selectedClipIndex === idx ? 'border-brand-500 bg-brand-950/10' : 'border-slate-800'} rounded-xl transition cursor-pointer hover:border-slate-600 space-y-4 relative`;
                     card.onclick = () => selectClip(idx);
                     
+                    const showsOllamaScore = hl.breakdown.llm_semantic_score !== undefined && hl.breakdown.llm_semantic_score > 0;
+                    
                     card.innerHTML = `
                         <div class="flex justify-between items-start">
                             <div>
@@ -545,16 +666,22 @@
                             </div>
                             <div class="text-right">
                                 <div class="text-xl font-black bg-gradient-to-r from-violet-400 to-indigo-400 bg-clip-text text-transparent">${hl.score}%</div>
-                                <p class="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Virality Score</p>
+                                <p class="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Blended Score</p>
                             </div>
                         </div>
                         
                         <div class="p-3 bg-slate-900/60 rounded-lg text-xs italic text-slate-300 border border-slate-850/50 leading-relaxed">
                             "${hl.text}"
                         </div>
+
+                        <!-- Ollama AI Explanation -->
+                        <div class="text-[10px] text-slate-400 bg-slate-900/30 px-3 py-1.5 rounded-lg border border-slate-900 flex items-start space-x-1.5">
+                            <span class="text-teal-400 text-xs">💬</span>
+                            <span><strong>AI Summary:</strong> ${hl.explanation}</span>
+                        </div>
                         
                         <!-- Breakdown Progress Bars -->
-                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 text-[10px] border-t border-slate-900">
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-slate-900 text-[9px]">
                             <div>
                                 <div class="flex justify-between text-slate-500 mb-0.5">
                                     <span>🔊 Audio Energy</span>
@@ -578,10 +705,10 @@
                             </div>
                             <div>
                                 <div class="flex justify-between text-slate-500 mb-0.5">
-                                    <span>🎯 Hook Strength</span>
-                                    <span>${hl.breakdown.hook_strength}%</span>
+                                    <span>🤖 Ollama Semantic</span>
+                                    <span>${showsOllamaScore ? Math.round(hl.breakdown.llm_semantic_score) : '0'}%</span>
                                 </div>
-                                <div class="w-full bg-slate-900 rounded-full h-1"><div class="bg-amber-500 h-1 rounded-full" style="width: ${hl.breakdown.hook_strength}%"></div></div>
+                                <div class="w-full bg-slate-900 rounded-full h-1"><div class="bg-teal-500 h-1 rounded-full" style="width: ${showsOllamaScore ? hl.breakdown.llm_semantic_score : 0}%"></div></div>
                             </div>
                         </div>
 
@@ -597,6 +724,7 @@
                 });
             }
             highlightsList.classList.remove('hidden');
+            updateExportButtonsState();
         }
 
         function formatSec(seconds) {
@@ -606,7 +734,6 @@
         }
 
         function selectClip(idx) {
-            // Unselect previous
             const cards = highlightsList.children;
             for(let i=0; i<cards.length; i++) {
                 cards[i].classList.remove('border-brand-500', 'bg-brand-950/10');
@@ -625,7 +752,6 @@
             updateExportButtonsState();
         }
 
-        // Observe compliance checkboxes to toggle the export buttons
         [chkOwn, chkTransform, chkNoSurprise].forEach(chk => {
             chk.addEventListener('change', updateExportButtonsState);
         });
@@ -633,8 +759,7 @@
         function updateExportButtonsState() {
             const compliant = chkOwn.checked && chkTransform.checked && chkNoSurprise.checked;
             
-            // Loop through all export buttons in the active highlight items
-            for(let i=0; i<5; i++) {
+            for(let i = 0; i < activeHighlights.length; i++) {
                 const btn = document.getElementById(`btn-export-${i}`);
                 if (btn) {
                     btn.disabled = !compliant;
@@ -648,7 +773,6 @@
         }
 
         async function exportSelectedClip(event, idx) {
-            // Prevent event bubbling to card selection
             event.stopPropagation();
             
             const compliant = chkOwn.checked && chkTransform.checked && chkNoSurprise.checked;
@@ -659,24 +783,19 @@
 
             // Open progress modal
             exportModal.classList.remove('hidden');
-            updateRenderProgress("Step 1/3: Running OpenCV Auto-Crop & Smooth Face Tracking...", 20);
+            updateRenderProgress("Initiating render job...", 0);
             
             const trackFaces = document.getElementById('toggle-face-track').checked;
             const captionStyle = document.getElementById('select-caption-style').value;
             const enableVoiceover = document.getElementById('toggle-voiceover').checked;
             const voiceoverText = document.getElementById('voiceover-text').value;
             const voiceAccent = document.getElementById('select-voice-accent').value;
-
-            // Trigger simulated transition on rendering dialog
-            setTimeout(() => {
-                updateRenderProgress("Step 2/3: Applying voiceover & mixing audio tracks with volume ducking...", 50);
-            }, 8000);
             
-            setTimeout(() => {
-                updateRenderProgress("Step 3/3: Running word timing estimators and burning animated subtitles...", 80);
-            }, 18000);
+            const useKokoro = toggleUseKokoro.checked;
+            const kokoroVoice = document.getElementById('select-kokoro-voice').value;
 
             try {
+                // Call /export to start job
                 const response = await fetch('/export', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -686,23 +805,48 @@
                         caption_style: captionStyle,
                         enable_voiceover: enableVoiceover,
                         voiceover_text: voiceoverText,
-                        accent_tld: voiceAccent
+                        accent_tld: voiceAccent,
+                        use_kokoro: useKokoro,
+                        kokoro_voice: kokoroVoice
                     })
                 });
                 
-                const data = await parseJsonResponse(response);
-                if (response.ok) {
-                    updateRenderProgress("Complete!", 100);
-                    setTimeout(() => {
-                        exportModal.classList.add('hidden');
-                        showRenderedPreview(data);
-                    }, 500);
-                } else {
-                    alert("Export failure: " + data.detail);
+                const initData = await parseJsonResponse(response);
+                if (!response.ok) {
+                    alert("Export failure: " + initData.detail);
                     exportModal.classList.add('hidden');
+                    return;
                 }
+                
+                const jobId = initData.job_id;
+                
+                // Start dynamic polling of export status (100% precise)
+                const statusInterval = setInterval(async () => {
+                    try {
+                        const statusResponse = await fetch(`/export/status/${jobId}`);
+                        const job = await parseJsonResponse(statusResponse);
+                        
+                        if (job.status === "processing") {
+                            updateRenderProgress(job.stage, job.progress);
+                        } else if (job.status === "completed") {
+                            clearInterval(statusInterval);
+                            updateRenderProgress("Finished!", 100);
+                            setTimeout(() => {
+                                exportModal.classList.add('hidden');
+                                showRenderedPreview(job.result);
+                            }, 500);
+                        } else if (job.status === "failed") {
+                            clearInterval(statusInterval);
+                            alert("Background Render Failed: " + job.error);
+                            exportModal.classList.add('hidden');
+                        }
+                    } catch (err) {
+                        console.error("Polling error:", err);
+                    }
+                }, 1000);
+
             } catch(e) {
-                alert("Export network timeout or error: " + e);
+                alert("Export network error: " + e.message);
                 exportModal.classList.add('hidden');
             }
         }
@@ -710,6 +854,7 @@
         function updateRenderProgress(stageText, percentage) {
             renderStage.innerText = stageText;
             renderProgressBar.style.width = `${percentage}%`;
+            renderProgressPercent.innerText = `${percentage}%`;
         }
 
         function showRenderedPreview(data) {
@@ -717,7 +862,6 @@
             renderedDur.innerText = `${Math.round(data.duration)}s`;
             renderedCaps.innerText = document.getElementById('select-caption-style').options[document.getElementById('select-caption-style').selectedIndex].text.split(' ')[1] || "Active";
             
-            // Reload video player sources
             playerSrc.src = data.download_url;
             outputPlayer.load();
             
