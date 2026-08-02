@@ -173,6 +173,11 @@ class VideoCropper:
                 crop_y_top = int((orig_height - target_height) / 2.0)
                 
             cropped_frame = frame[crop_y_top:crop_y_top+target_height, crop_x_left:crop_x_left+target_width]
+            # OpenCV 5.0.0's VideoWriter.write() throws "Unknown C++ exception from
+            # OpenCV code" when handed a non-contiguous array — a numpy slice like
+            # this is a view, not a copy, and becomes non-contiguous once crop_x_left
+            # shifts away from 0. Force a contiguous copy before writing.
+            cropped_frame = np.ascontiguousarray(cropped_frame)
             out.write(cropped_frame)
             
             current_frame += 1

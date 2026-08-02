@@ -11,6 +11,37 @@ def test_haar_cascade_loaded_successfully():
     assert cropper.face_cascade is not None
     assert not cropper.face_cascade.empty()
 
+def test_videowriter_accepts_non_full_width_crop_slices():
+    """
+    Regression test for a real bug found running against an actual uploaded
+    video (not the small synthetic fixture below): cv2.VideoWriter.write()
+    threw 'Unknown C++ exception from OpenCV code' on OpenCV 5.0.0 when handed
+    a numpy slice like frame[y1:y2, x1:x2] that doesn't span the full source
+    width — a non-contiguous view. The fix (np.ascontiguousarray before
+    write()) is in video_cropper.py; this test writes several such slices at
+    a 1920-wide source size (matching the real video that triggered it) and
+    asserts none of them raise.
+    """
+    output_path = "test_writer_contiguity_check.mp4"
+    try:
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        target_width, target_height = 608, 1080
+        out = cv2.VideoWriter(output_path, fourcc, 24, (target_width, target_height))
+        assert out.isOpened()
+
+        source_width = 1920
+        for crop_x_left in [0, 100, 342, 500, 656]:  # varying, non-zero offsets
+            frame = np.random.randint(0, 255, (target_height, source_width, 3), dtype=np.uint8)
+            cropped = frame[0:target_height, crop_x_left:crop_x_left + target_width]
+            cropped = np.ascontiguousarray(cropped)  # the fix under test
+            out.write(cropped)  # must not raise cv2.error
+        out.release()
+        assert os.path.exists(output_path)
+        assert os.path.getsize(output_path) > 0
+    finally:
+        if os.path.exists(output_path):
+            os.remove(output_path)
+
 def create_dummy_video(filename, duration_sec=2, fps=24, width=640, height=360):
     """Creates a short 2-second landscape video with actual moving graphics and sinus audio."""
     # Write temporary silent video track
