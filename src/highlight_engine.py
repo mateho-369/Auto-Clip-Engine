@@ -213,14 +213,13 @@ class HighlightEngine:
             print(f"Error in visual analysis: {e}")
             return []
 
-    def score_highlights_via_ollama(self, candidates, ollama_host="http://localhost:11434", ollama_model="llama3.2:3b"):
+    def score_highlights_via_llm(self, candidates, provider="Ollama", host="http://localhost:11434", model="llama3.2:3b", api_key=None):
         """
-        Sends the top highlight candidates to a local Ollama instance for semantic virality analysis.
-        Integrates seamlessly and degrades gracefully if Ollama is offline.
+        Sends the top highlight candidates to local Ollama or an OpenAI-compatible endpoint
+        for semantic virality analysis. Blends results and degrades gracefully.
         """
-        print(f"Connecting to Ollama model '{ollama_model}' on {ollama_host}...")
+        print(f"Running LLM pass: Provider={provider}, Model={model}, Host={host}")
         
-        # Prepare the candidates to be sent to Ollama
         simplified_candidates = [
             {
                 "index": i,
@@ -231,79 +230,103 @@ class HighlightEngine:
             for i, cand in enumerate(candidates)
         ]
         
-        # Craft prompt requesting strict JSON response
-        prompt = (
+        system_prompt = (
             "You are a viral social media editor. Analyze the transcript segments of this video "
             "and assign a 'semantic_score' between 0 and 100 based on humor, hook potential, insight, "
             "and suitability for TikTok/Shorts. Provide a short 'reason' for each.\n\n"
-            f"Candidates JSON:\n{json.dumps(simplified_candidates, indent=2)}\n\n"
             "Respond ONLY with a valid JSON array of objects, each containing exact keys: 'index' (int), "
             "'semantic_score' (int), and 'reason' (string). Do not output any introductory or concluding text."
         )
         
-        url = f"{ollama_host}/api/generate"
-        payload = {
-            "model": ollama_model,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": 0.2
-            }
-        }
+        user_content = f"Candidates JSON:\n{json.dumps(simplified_candidates, indent=2)}"
         
         try:
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"}
-            )
-            with urllib.request.urlopen(req, timeout=8) as response:
-                resp_data = json.loads(response.read().decode("utf-8"))
-                response_text = resp_data.get("response", "").strip()
+            if provider.lower() == "ollama":
+                url = f"{host}/api/generate"
+                payload = {
+                    "model": model,
+                    "prompt": f"{system_prompt}\n\n{user_content}",
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.2
+                    }
+                }
+                headers = {"Content-Type": "application/json"}
                 
-                # Attempt to extract JSON array out of response text in case model added markdown wrapping
-                json_match = re.search(r"\[\s*\{.*\}\s*\]", response_text, re.DOTALL)
-                if json_match:
-                    response_text = json_match.group(0)
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers=headers
+                )
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    resp_data = json.loads(response.read().decode("utf-8"))
+                    response_text = resp_data.get("response", "").strip()
+            else:
+                # OpenAI-compatible endpoints (standard Chat completions format)
+                url = host if host.endswith("/chat/completions") else f"{host.rstrip('/')}/chat/completions"
+                payload = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content}
+                    ],
+                    "temperature": 0.2
+                }
+                headers = {"Content-Type": "application/json"}
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
                     
-                ollama_scores = json.loads(response_text)
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers=headers
+                )
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    resp_data = json.loads(response.read().decode("utf-8"))
+                    response_text = resp_data["choices"][0]["message"]["content"].strip()
+            
+            # Clean response text in case LLM wraps it in markdown blocks
+            json_match = re.search(r"\[\s*\{.*\}\s*\]", response_text, re.DOTALL)
+            if json_match:
+                response_text = json_match.group(0)
                 
-                # Build lookup
-                scores_lookup = {item["index"]: item for item in ollama_scores}
-                
-                # Blend the local heuristic score with the LLM semantic score (40% heuristic, 60% LLM semantic)
-                for i, cand in enumerate(candidates):
-                    if i in scores_lookup:
-                        semantic_info = scores_lookup[i]
-                        sem_score = float(semantic_info.get("semantic_score", cand["score"]))
-                        reason = semantic_info.get("reason", "Ollama compiled rating")
-                        
-                        # Blended scoring
-                        blended_score = round((cand["score"] * 0.4) + (sem_score * 0.6), 2)
-                        cand["score"] = blended_score
-                        cand["hook_title"] = f"★ {cand['hook_title']}"
-                        cand["explanation"] = reason
-                        cand["breakdown"]["llm_semantic_score"] = sem_score
-                        print(f"  - Clip #{i+1} Ollama re-score: {cand['score']}% (Reason: {reason})")
-                    else:
-                        cand["explanation"] = "Ollama ranking skipped (Index mismatch)"
-                        cand["breakdown"]["llm_semantic_score"] = cand["score"]
-                        
-            print("Ollama semantic pass completed successfully!")
+            scores_list = json.loads(response_text)
+            scores_lookup = {item["index"]: item for item in scores_list}
+            
+            for i, cand in enumerate(candidates):
+                if i in scores_lookup:
+                    info = scores_lookup[i]
+                    sem_score = float(info.get("semantic_score", cand["score"]))
+                    reason = info.get("reason", "AI evaluated score")
+                    
+                    blended_score = round((cand["score"] * 0.4) + (sem_score * 0.6), 2)
+                    cand["score"] = blended_score
+                    cand["hook_title"] = f"★ {cand['hook_title']}"
+                    cand["explanation"] = reason
+                    cand["breakdown"]["llm_semantic_score"] = sem_score
+                    print(f"  - Clip #{i+1} LLM re-score: {cand['score']}% (Reason: {reason})")
+                else:
+                    cand["explanation"] = "LLM ranking skipped (Index mismatch)"
+                    cand["breakdown"]["llm_semantic_score"] = cand["score"]
+                    
+            print("LLM semantic pass completed successfully!")
+            
         except Exception as e:
-            print(f"Ollama integration warning/offline: {e}. Gracefully falling back to heuristic-only scoring.")
+            print(f"LLM integration warning/offline: {e}. Gracefully falling back to heuristic-only scoring.")
             for cand in candidates:
-                cand["explanation"] = "Local Ollama offline. Heuristic fallback active."
+                cand["explanation"] = f"LLM offline fallback. Heuristic rating active."
                 cand["breakdown"]["llm_semantic_score"] = 0.0
 
     def detect_highlights(self, min_clip_duration=15, max_clip_duration=30, top_n=5, 
                           use_whisper=True, whisper_model="small", 
-                          use_ollama=False, ollama_model="llama3.2:3b", ollama_host="http://localhost:11434"):
+                          llm_provider="Off", ollama_model="llama3.2:3b", ollama_host="http://localhost:11434",
+                          openai_base_url="http://localhost:20128/v1", openai_model="oc/deepseek-v4-flash-free",
+                          openai_api_key=None):
         """
-        Combines audio energy, motion detection, speech rate, and optional local LLM analysis (Ollama)
+        Combines audio energy, motion detection, speech rate, and optional LLM analysis (Ollama or OpenAI compatible)
         to identify and rank high-virality highlights.
         """
-        print("Starting Local-Upgraded Highlight Detection Pipeline...")
+        print("Starting Upgraded Highlight Detection Pipeline...")
         
         # 1. Extract audio
         temp_wav = "temp_extraction.wav"
@@ -445,11 +468,25 @@ class HighlightEngine:
                 
         top_candidates = unique_highlights[:top_n]
         
-        # 7. Apply optional local Ollama semantic re-ranking pass on top candidates
-        if use_ollama and len(top_candidates) > 0:
-            self.score_highlights_via_ollama(top_candidates, ollama_host=ollama_host, ollama_model=ollama_model)
+        # 7. Apply optional LLM semantic re-ranking pass on top candidates
+        if llm_provider != "Off" and len(top_candidates) > 0:
+            if llm_provider == "Ollama":
+                self.score_highlights_via_llm(
+                    top_candidates, 
+                    provider="Ollama", 
+                    host=ollama_host, 
+                    model=ollama_model
+                )
+            elif llm_provider == "OpenAI":
+                self.score_highlights_via_llm(
+                    top_candidates, 
+                    provider="OpenAI", 
+                    host=openai_base_url, 
+                    model=openai_model, 
+                    api_key=openai_api_key
+                )
             
-        # Sort again since score was updated by Ollama
+        # Sort again since score was updated by LLM
         top_candidates = sorted(top_candidates, key=lambda x: x["score"], reverse=True)
         
         return top_candidates

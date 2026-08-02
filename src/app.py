@@ -2,6 +2,7 @@ import os
 import shutil
 import uuid
 import threading
+import json
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -22,6 +23,8 @@ CLIPS_DIR = os.path.abspath("clips")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(CLIPS_DIR, exist_ok=True)
 
+CONFIG_PATH = os.path.abspath("config.json")
+
 templates = Jinja2Templates(directory="src/templates")
 
 # In-memory storage for current active video and analysis results
@@ -34,6 +37,31 @@ app_state = {
 # Thread-safe in-memory job status storage
 export_jobs = {}
 
+def load_settings():
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error loading config.json: {e}")
+    return {
+        "llm_provider": "Off",
+        "ollama_model": "llama3.2:3b",
+        "ollama_host": "http://localhost:11434",
+        "openai_base_url": "http://localhost:20128/v1",
+        "openai_model": "oc/deepseek-v4-flash-free",
+        "openai_api_key": ""
+    }
+
+def save_settings(data):
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print(f"Error saving config.json: {e}")
+        return False
+
 @app.get("/")
 async def home():
     """Serves the main dashboard page."""
@@ -41,6 +69,53 @@ async def home():
     if os.path.exists(template_path):
         return FileResponse(template_path, media_type="text/html")
     return {"message": "Global Highlights Auto-Clip Engine dashboard. Please place index.html in src/templates/"}
+
+@app.get("/settings")
+def get_settings():
+    """Returns currently saved settings with masked API key."""
+    settings = load_settings()
+    api_key = settings.get("openai_api_key", "")
+    masked_key = ""
+    if api_key:
+        if len(api_key) > 8:
+            masked_key = api_key[:4] + "••••" + api_key[-4:]
+        else:
+            masked_key = "••••••••"
+    
+    resp_settings = dict(settings)
+    resp_settings["openai_api_key"] = masked_key
+    return resp_settings
+
+class SettingsModel(BaseModel):
+    llm_provider: str = "Off"  # Off, Ollama, OpenAI
+    ollama_model: str = "llama3.2:3b"
+    ollama_host: str = "http://localhost:11434"
+    openai_base_url: str = "http://localhost:20128/v1"
+    openai_model: str = "oc/deepseek-v4-flash-free"
+    openai_api_key: Optional[str] = ""
+
+@app.post("/settings")
+def post_settings(req: SettingsModel):
+    """Saves user settings to config.json, protecting masked API keys."""
+    current = load_settings()
+    api_key = req.openai_api_key
+    if api_key and "••••" in api_key:
+        api_key = current.get("openai_api_key", "")
+        
+    updated = {
+        "llm_provider": req.llm_provider,
+        "ollama_model": req.ollama_model,
+        "ollama_host": req.ollama_host,
+        "openai_base_url": req.openai_base_url,
+        "openai_model": req.openai_model,
+        "openai_api_key": api_key
+    }
+    
+    success = save_settings(updated)
+    if success:
+        return {"status": "success", "message": "Settings saved successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to save settings to config.json")
 
 @app.post("/upload")
 def upload_video(file: UploadFile = File(...)):
@@ -171,13 +246,16 @@ def load_demo():
 class AnalyzeRequest(BaseModel):
     use_whisper: bool = True
     whisper_model: str = "tiny"
-    use_ollama: bool = False
-    ollama_model: str = "llama3.2:3b"
-    ollama_host: str = "http://localhost:11434"
+    llm_provider: Optional[str] = None
+    ollama_model: Optional[str] = None
+    ollama_host: Optional[str] = None
+    openai_base_url: Optional[str] = None
+    openai_model: Optional[str] = None
+    openai_api_key: Optional[str] = None
 
 @app.post("/analyze")
 def analyze_video(req: AnalyzeRequest):
-    """Runs the HighlightEngine with local-upgraded features (faster-whisper and Ollama semantic pass)."""
+    """Runs the HighlightEngine with local-upgraded features and customizable online/offline LLM providers."""
     video_path = app_state["current_video_path"]
     if not video_path or not os.path.exists(video_path):
         raise HTTPException(
@@ -186,14 +264,31 @@ def analyze_video(req: AnalyzeRequest):
         )
         
     try:
+        saved = load_settings()
+        
+        # Override parameters if supplied
+        llm_provider = req.llm_provider if req.llm_provider is not None else saved.get("llm_provider", "Off")
+        ollama_model = req.ollama_model if req.ollama_model is not None else saved.get("ollama_model", "llama3.2:3b")
+        ollama_host = req.ollama_host if req.ollama_host is not None else saved.get("ollama_host", "http://localhost:11434")
+        openai_base_url = req.openai_base_url if req.openai_base_url is not None else saved.get("openai_base_url", "http://localhost:20128/v1")
+        openai_model = req.openai_model if req.openai_model is not None else saved.get("openai_model", "oc/deepseek-v4-flash-free")
+        openai_api_key = req.openai_api_key if req.openai_api_key is not None else saved.get("openai_api_key", "")
+        
+        # Swap back true API key if it came in masked from the client UI
+        if openai_api_key and "••••" in openai_api_key:
+            openai_api_key = saved.get("openai_api_key", "")
+            
         engine = HighlightEngine(video_path)
         highlights = engine.detect_highlights(
             top_n=5,
             use_whisper=req.use_whisper,
             whisper_model=req.whisper_model,
-            use_ollama=req.use_ollama,
-            ollama_model=req.ollama_model,
-            ollama_host=req.ollama_host
+            llm_provider=llm_provider,
+            ollama_model=ollama_model,
+            ollama_host=ollama_host,
+            openai_base_url=openai_base_url,
+            openai_model=openai_model,
+            openai_api_key=openai_api_key
         )
         
         app_state["highlights"] = highlights

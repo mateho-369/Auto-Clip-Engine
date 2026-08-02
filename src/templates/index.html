@@ -104,16 +104,18 @@
                             </select>
                         </div>
 
-                        <!-- Ollama Integration -->
+                        <!-- Semantic LLM Pass Integration -->
                         <div class="p-3.5 bg-slate-950 rounded-xl border border-slate-800/80 space-y-3">
-                            <div class="flex items-center justify-between">
-                                <span class="font-bold text-slate-200">Semantic LLM Pass (Ollama)</span>
-                                <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" id="setting-use-ollama" class="sr-only peer">
-                                    <div class="w-8 h-4 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-300 after:border-slate-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-brand-600"></div>
-                                </label>
+                            <div>
+                                <label class="block font-bold text-slate-200 mb-1.5">Semantic LLM Pass</label>
+                                <select id="setting-llm-provider" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-2 text-slate-200 focus:outline-none">
+                                    <option value="Off">❌ Off (Heuristic Only)</option>
+                                    <option value="Ollama">🖥️ Offline (Ollama Local)</option>
+                                    <option value="OpenAI">🌐 Online (OpenAI-compatible / 9Router)</option>
+                                </select>
                             </div>
                             
+                            <!-- Ollama configs sub-panel -->
                             <div class="hidden space-y-2.5 pt-2 border-t border-slate-900" id="ollama-config-sub">
                                 <div class="grid grid-cols-2 gap-2">
                                     <div>
@@ -126,7 +128,28 @@
                                     </div>
                                 </div>
                                 <p class="text-[9px] text-slate-500 leading-normal">
-                                    Uses Ollama to evaluate candidate humor & virality. Runs sequentially in the background. Degrades gracefully if Ollama is offline.
+                                    Evaluates candidate humor locally. Requires Ollama daemon and llama3.2:3b active.
+                                </p>
+                            </div>
+
+                            <!-- OpenAI-compatible configs sub-panel -->
+                            <div class="hidden space-y-2.5 pt-2 border-t border-slate-900" id="openai-config-sub">
+                                <div class="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label class="block text-[10px] text-slate-500 mb-1 font-bold">Base URL</label>
+                                        <input type="text" id="setting-openai-url" value="http://localhost:20128/v1" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-slate-200 focus:outline-none font-mono">
+                                    </div>
+                                    <div>
+                                        <label class="block text-[10px] text-slate-500 mb-1 font-bold">Model name</label>
+                                        <input type="text" id="setting-openai-model" value="oc/deepseek-v4-flash-free" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-slate-200 focus:outline-none font-mono">
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-[10px] text-slate-500 mb-1 font-bold">API Key</label>
+                                    <input type="password" id="setting-openai-key" placeholder="Enter API Key" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none font-mono">
+                                </div>
+                                <p class="text-[9px] text-slate-400 bg-brand-950/20 p-2 rounded border border-brand-900/30 leading-normal">
+                                    🔒 <strong>Privacy Note:</strong> When routing through free promotional models (e.g. OpenCode Zen free tier via 9Router), requests may be recorded to improve models.
                                 </p>
                             </div>
                         </div>
@@ -426,8 +449,9 @@
         const toggleVoiceover = document.getElementById('toggle-voiceover');
         const voiceoverSetup = document.getElementById('voiceover-setup');
         
-        const settingUseOllama = document.getElementById('setting-use-ollama');
+        const settingLlmProvider = document.getElementById('setting-llm-provider');
         const ollamaConfigSub = document.getElementById('ollama-config-sub');
+        const openaiConfigSub = document.getElementById('openai-config-sub');
         const toggleUseKokoro = document.getElementById('toggle-use-kokoro');
         const accentSelectorDiv = document.getElementById('accent-selector-div');
         const kokoroVoiceSelectorDiv = document.getElementById('kokoro-voice-selector-div');
@@ -463,13 +487,75 @@
         }
 
         // Setting toggle handlers
-        settingUseOllama.addEventListener('change', () => {
-            if(settingUseOllama.checked) {
+        function toggleLlmPanelViews() {
+            const provider = settingLlmProvider.value;
+            if (provider === "Ollama") {
                 ollamaConfigSub.classList.remove('hidden');
+                openaiConfigSub.classList.add('hidden');
+            } else if (provider === "OpenAI") {
+                ollamaConfigSub.classList.add('hidden');
+                openaiConfigSub.classList.remove('hidden');
             } else {
                 ollamaConfigSub.classList.add('hidden');
+                openaiConfigSub.classList.add('hidden');
+            }
+        }
+
+        settingLlmProvider.addEventListener('change', () => {
+            toggleLlmPanelViews();
+            saveCurrentSettings();
+        });
+
+        // Add auto-save change listeners for all configuration inputs
+        ['setting-ollama-model', 'setting-ollama-host', 'setting-openai-url', 'setting-openai-model', 'setting-openai-key'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.addEventListener('change', saveCurrentSettings);
+                el.addEventListener('input', saveCurrentSettings);
             }
         });
+
+        async function saveCurrentSettings() {
+            const payload = {
+                llm_provider: settingLlmProvider.value,
+                ollama_model: document.getElementById('setting-ollama-model').value,
+                ollama_host: document.getElementById('setting-ollama-host').value,
+                openai_base_url: document.getElementById('setting-openai-url').value,
+                openai_model: document.getElementById('setting-openai-model').value,
+                openai_api_key: document.getElementById('setting-openai-key').value
+            };
+            
+            try {
+                await fetch("/settings", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+            } catch(e) {
+                console.error("Failed to auto-save settings:", e);
+            }
+        }
+
+        async function loadSavedSettings() {
+            try {
+                const res = await fetch("/settings");
+                const config = await res.json();
+                
+                settingLlmProvider.value = config.llm_provider || "Off";
+                document.getElementById('setting-ollama-model').value = config.ollama_model || "llama3.2:3b";
+                document.getElementById('setting-ollama-host').value = config.ollama_host || "http://localhost:11434";
+                document.getElementById('setting-openai-url').value = config.openai_base_url || "http://localhost:20128/v1";
+                document.getElementById('setting-openai-model').value = config.openai_model || "oc/deepseek-v4-flash-free";
+                document.getElementById('setting-openai-key').value = config.openai_api_key || "";
+                
+                toggleLlmPanelViews();
+            } catch(e) {
+                console.error("Failed to load settings:", e);
+            }
+        }
+
+        // Initialize settings on load
+        window.addEventListener('DOMContentLoaded', loadSavedSettings);
 
         toggleUseKokoro.addEventListener('change', () => {
             if(toggleUseKokoro.checked) {
@@ -596,17 +682,21 @@
             const transcribeEngine = document.getElementById('setting-transcribe-engine').value;
             const useWhisper = transcribeEngine.startsWith("whisper");
             const whisperModel = useWhisper ? transcribeEngine.split("-")[1] : "tiny";
-            const useOllama = settingUseOllama.checked;
+            
+            const llmProvider = settingLlmProvider.value;
             const ollamaModel = document.getElementById('setting-ollama-model').value;
             const ollamaHost = document.getElementById('setting-ollama-host').value;
+            const openaiBaseUrl = document.getElementById('setting-openai-url').value;
+            const openaiModel = document.getElementById('setting-openai-model').value;
+            const openaiApiKey = document.getElementById('setting-openai-key').value;
 
             if (useWhisper) {
                 analysisSubtext.innerText = `Loading local faster-whisper (${whisperModel}) and running transcription...`;
             } else {
                 analysisSubtext.innerText = "Transcribing speech sequentially via Google SpeechRecognition API...";
             }
-            if (useOllama) {
-                analysisSubtext.innerText += " and checking Ollama semantic re-ranking pass...";
+            if (llmProvider !== "Off") {
+                analysisSubtext.innerText += " and running semantic LLM re-ranking pass...";
             }
 
             try {
@@ -616,9 +706,12 @@
                     body: JSON.stringify({
                         use_whisper: useWhisper,
                         whisper_model: whisperModel,
-                        use_ollama: useOllama,
+                        llm_provider: llmProvider,
                         ollama_model: ollamaModel,
-                        ollama_host: ollamaHost
+                        ollama_host: ollamaHost,
+                        openai_base_url: openaiBaseUrl,
+                        openai_model: openaiModel,
+                        openai_api_key: openaiApiKey
                     })
                 });
                 const data = await parseJsonResponse(response);

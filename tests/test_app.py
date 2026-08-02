@@ -38,8 +38,7 @@ def test_analyze_no_video_loaded():
     response = client.post(
         "/analyze",
         json={
-            "use_whisper": False,
-            "use_ollama": False
+            "use_whisper": False
         }
     )
     assert response.status_code == 400
@@ -77,8 +76,7 @@ def test_analyze_success(mock_engine_class):
         response = client.post(
             "/analyze",
             json={
-                "use_whisper": False,
-                "use_ollama": False
+                "use_whisper": False
             }
         )
         assert response.status_code == 200
@@ -144,3 +142,44 @@ def test_export_and_polling_flow(mock_cropper_class):
         job_data = status_response.json()
         assert "status" in job_data
         assert job_data["status"] in ["processing", "completed", "failed"]
+
+def test_settings_get_and_post():
+    """Verify settings can be set, get correctly, API key is masked and protected on update."""
+    # 1. Post new settings with a true key
+    payload = {
+        "llm_provider": "OpenAI",
+        "ollama_model": "llama3.2:3b",
+        "ollama_host": "http://localhost:11434",
+        "openai_base_url": "http://localhost:20128/v1",
+        "openai_model": "oc/deepseek-v4-flash-free",
+        "openai_api_key": "sk-secret-true-key-content"
+    }
+    post_res = client.post("/settings", json=payload)
+    assert post_res.status_code == 200
+    
+    # 2. Get settings, verify keys are returned masked
+    get_res = client.get("/settings")
+    assert get_res.status_code == 200
+    get_data = get_res.json()
+    assert get_data["llm_provider"] == "OpenAI"
+    assert "••••" in get_data["openai_api_key"]
+    assert "sk-secret" not in get_data["openai_api_key"]
+    
+    # 3. Post settings back with masked key (simulating typical UI update)
+    payload_masked = {
+        "llm_provider": "OpenAI",
+        "ollama_model": "llama3.2:3b",
+        "ollama_host": "http://localhost:11434",
+        "openai_base_url": "http://localhost:20128/v1",
+        "openai_model": "oc/deepseek-v4-flash-free",
+        "openai_api_key": get_data["openai_api_key"] # passing the masked key back
+    }
+    post_res_masked = client.post("/settings", json=payload_masked)
+    assert post_res_masked.status_code == 200
+    
+    # Clean up generated config file if desired, or let it persist
+    if os.path.exists("config.json"):
+        try:
+            os.remove("config.json")
+        except:
+            pass

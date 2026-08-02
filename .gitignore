@@ -18,3 +18,4 @@ temp_*.mp4
 *.onnx
 *.bin
 *.tflite
+config.json
