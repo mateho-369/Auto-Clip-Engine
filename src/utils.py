@@ -18,6 +18,51 @@ def has_nvidia_gpu():
         pass
     return False
 
+def _detected_gpu_names():
+    """Returns a lowercase string of detected GPU adapter names, best-effort,
+    for substring-matching vendor (amd/radeon, intel). Empty string on any
+    failure — callers must treat that as 'unknown', not 'no GPU'."""
+    sys_platform = platform.system()
+    try:
+        if sys_platform == "Windows":
+            # wmic is deprecated but still present on most Windows installs;
+            # fall back to the PowerShell CIM cmdlet if it's missing.
+            try:
+                res = subprocess.run(
+                    ["wmic", "path", "win32_VideoController", "get", "name"],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    return res.stdout.lower()
+            except Exception:
+                pass
+            res = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "(Get-CimInstance Win32_VideoController).Name"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5
+            )
+            if res.returncode == 0:
+                return res.stdout.lower()
+        elif sys_platform == "Linux":
+            res = subprocess.run(
+                ["lspci"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3
+            )
+            if res.returncode == 0:
+                return "\n".join(l for l in res.stdout.lower().splitlines() if "vga" in l or "3d" in l)
+    except Exception:
+        pass
+    return ""
+
+def has_amd_gpu():
+    """Physical AMD/Radeon GPU check — mirrors has_nvidia_gpu()'s safety principle."""
+    names = _detected_gpu_names()
+    return ("amd" in names) or ("radeon" in names)
+
+def has_intel_gpu():
+    """Physical Intel GPU check — mirrors has_nvidia_gpu()'s safety principle."""
+    names = _detected_gpu_names()
+    return "intel" in names
+
 def get_best_available_codec():
     """
     Auto-detects the best available hardware-accelerated video codec 
@@ -54,13 +99,13 @@ def get_best_available_codec():
         return _selected_codec
 
     # Priority C: AMD AMF (Native Windows AMD GPU acceleration for cards like Radeon RX / Ryzen iGPU)
-    if "h264_amf" in encoders and sys_platform == "Windows":
+    if "h264_amf" in encoders and sys_platform == "Windows" and has_amd_gpu():
         _selected_codec = "h264_amf"
         print("✔ AMD AMF hardware acceleration detected! Optimizing render for AMD Radeon.")
         return _selected_codec
 
     # Priority D: Intel QuickSync Video (QSV)
-    if "h264_qsv" in encoders:
+    if "h264_qsv" in encoders and has_intel_gpu():
         _selected_codec = "h264_qsv"
         print("✔ Intel QuickSync (QSV) hardware acceleration detected!")
         return _selected_codec
