@@ -13,3 +13,5 @@ faster-whisper==1.2.1
 kokoro-onnx==0.5.0
 mediapipe==1.0.0
 soundfile==0.13.1
+nvidia-cublas-cu12
+nvidia-cudnn-cu12

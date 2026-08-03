@@ -9,6 +9,18 @@ import speech_recognition as sr
 from moviepy import VideoFileClip
 import cv2
 
+# Programmatically inject NVIDIA DLL paths into Windows PATH variable (fixes Windows faster-whisper/ctranslate2 loading issues)
+if os.name == 'nt':
+    import sys
+    for p in sys.path:
+        if 'site-packages' in p:
+            cublas_path = os.path.join(p, 'nvidia', 'cublas', 'bin')
+            cudnn_path = os.path.join(p, 'nvidia', 'cudnn', 'bin')
+            if os.path.exists(cublas_path) and cublas_path not in os.environ['PATH']:
+                os.environ['PATH'] = cublas_path + os.pathsep + os.environ['PATH']
+            if os.path.exists(cudnn_path) and cudnn_path not in os.environ['PATH']:
+                os.environ['PATH'] = cudnn_path + os.pathsep + os.environ['PATH']
+
 class HighlightEngine:
     def __init__(self, video_path):
         self.video_path = video_path
