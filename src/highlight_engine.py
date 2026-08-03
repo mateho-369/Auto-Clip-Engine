@@ -171,10 +171,12 @@ class HighlightEngine:
             try:
                 model = WhisperModel(whisper_model, device="cuda", compute_type="float16")
                 print("faster-whisper running on GPU (CUDA).")
+                segments, info = model.transcribe(wav_path, beam_size=5)
+                segments = list(segments)  # force any lazy CUDA error to surface here, while still in this try
             except Exception as gpu_err:
                 print(f"GPU unavailable for faster-whisper ({gpu_err}), using CPU instead.")
                 model = WhisperModel(whisper_model, device="cpu", compute_type="int8")
-            segments, info = model.transcribe(wav_path, beam_size=5)
+                segments, info = model.transcribe(wav_path, beam_size=5)
             
             transcripts = []
             for s in segments:
