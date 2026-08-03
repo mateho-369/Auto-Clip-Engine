@@ -12,14 +12,34 @@ import cv2
 # Programmatically inject NVIDIA DLL paths into Windows PATH variable (fixes Windows faster-whisper/ctranslate2 loading issues)
 if os.name == 'nt':
     import sys
+    
+    # Collect all candidate site-packages directories
+    candidate_paths = []
+    
+    # Strategy A: Check VIRTUAL_ENV environment variable
+    venv_path = os.environ.get('VIRTUAL_ENV')
+    if venv_path:
+        candidate_paths.append(os.path.join(venv_path, 'Lib', 'site-packages'))
+        candidate_paths.append(os.path.join(venv_path, 'lib', 'site-packages'))
+        
+    # Strategy B: Loop sys.path
     for p in sys.path:
-        if 'site-packages' in p:
-            cublas_path = os.path.join(p, 'nvidia', 'cublas', 'bin')
-            cudnn_path = os.path.join(p, 'nvidia', 'cudnn', 'bin')
-            if os.path.exists(cublas_path) and cublas_path not in os.environ['PATH']:
-                os.environ['PATH'] = cublas_path + os.pathsep + os.environ['PATH']
-            if os.path.exists(cudnn_path) and cudnn_path not in os.environ['PATH']:
-                os.environ['PATH'] = cudnn_path + os.pathsep + os.environ['PATH']
+        if 'site-packages' in p.lower():
+            candidate_paths.append(p)
+            
+    # Remove duplicates
+    candidate_paths = list(set(candidate_paths))
+    
+    # Inject valid paths
+    for sp in candidate_paths:
+        cublas_path = os.path.join(sp, 'nvidia', 'cublas', 'bin')
+        cudnn_path = os.path.join(sp, 'nvidia', 'cudnn', 'bin')
+        if os.path.exists(cublas_path) and cublas_path not in os.environ['PATH']:
+            os.environ['PATH'] = cublas_path + os.pathsep + os.environ['PATH']
+            print(f"Programmatically injected cublas PATH: {cublas_path}")
+        if os.path.exists(cudnn_path) and cudnn_path not in os.environ['PATH']:
+            os.environ['PATH'] = cudnn_path + os.pathsep + os.environ['PATH']
+            print(f"Programmatically injected cudnn PATH: {cudnn_path}")
 
 class HighlightEngine:
     def __init__(self, video_path):
