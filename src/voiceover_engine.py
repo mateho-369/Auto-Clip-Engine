@@ -1,6 +1,7 @@
 import os
 from gtts import gTTS
 from moviepy import VideoFileClip, AudioFileClip, CompositeAudioClip
+from src.utils import write_video_safely
 
 class VoiceoverEngine:
     def __init__(self, kokoro_model_path="kokoro-v0_19.onnx", kokoro_voices_path="voices.bin"):
@@ -98,12 +99,7 @@ class VoiceoverEngine:
                     
                 # Bind the new composite audio back to the video
                 final_video = video.with_audio(final_audio)
-                final_video.write_videofile(
-                    output_video_path,
-                    codec="libx264",
-                    audio_codec="aac",
-                    logger=None
-                )
+                write_video_safely(final_video, output_video_path, audio_codec="aac")
                 
             # Clean up temp files
             if os.path.exists(temp_voice_path):

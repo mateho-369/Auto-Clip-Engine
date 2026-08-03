@@ -3,6 +3,7 @@ import wave
 import json
 import re
 import urllib.request
+import time
 import numpy as np
 import speech_recognition as sr
 from moviepy import VideoFileClip
@@ -15,6 +16,7 @@ class HighlightEngine:
         self.fps = 0
         self.width = 0
         self.height = 0
+        self.last_timing = {}
         
         # Get video metadata
         try:
@@ -176,36 +178,59 @@ class HighlightEngine:
             return self.transcribe_audio_segments(wav_path, segment_duration=15)
 
     def analyze_visual_motion(self, max_frames_to_check=500):
-        """Computes average frame-to-frame motion score of the video."""
-        print("Analyzing visual motion peaks...")
+        """
+        Computes representative frame-to-frame motion scores spread evenly
+        across the entire video timeline. Returns a list of dicts: {"time": t, "score": s}.
+        """
+        print("Analyzing visual motion peaks across full duration...")
         motion_scores = []
         try:
             cap = cv2.VideoCapture(self.video_path)
-            ret, prev_frame = cap.read()
-            if not ret:
+            if not cap.isOpened():
+                return []
+                
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            if fps <= 0:
+                fps = 30 # standard fallback
+                
+            if total_frames <= 0:
                 cap.release()
                 return []
                 
-            prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-            # Resize for faster processing
-            prev_gray = cv2.resize(prev_gray, (160, 90))
+            # Spread indices evenly from start to end (at most max_frames_to_check)
+            if total_frames <= max_frames_to_check:
+                indices = list(range(total_frames))
+            else:
+                indices = [int(i * (total_frames - 1) / (max_frames_to_check - 1)) for i in range(max_frames_to_check)]
+                
+            prev_gray = None
             
-            frame_count = 0
-            while cap.isOpened() and frame_count < max_frames_to_check:
+            for idx in indices:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
                 ret, frame = cap.read()
                 if not ret:
-                    break
+                    continue
                     
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 gray = cv2.resize(gray, (160, 90))
                 
-                # Compute absolute difference between frames
-                diff = cv2.absdiff(gray, prev_gray)
-                mean_diff = np.mean(diff)
-                motion_scores.append(float(mean_diff)) # Cast to float
+                time_sec = float(idx / fps)
                 
+                if prev_gray is not None:
+                    diff = cv2.absdiff(gray, prev_gray)
+                    mean_diff = float(np.mean(diff))
+                    motion_scores.append({
+                        "time": time_sec,
+                        "score": mean_diff
+                    })
+                else:
+                    motion_scores.append({
+                        "time": time_sec,
+                        "score": 0.0
+                    })
+                    
                 prev_gray = gray
-                frame_count += 1
                 
             cap.release()
             return motion_scores
@@ -324,29 +349,35 @@ class HighlightEngine:
                           openai_api_key=None):
         """
         Combines audio energy, motion detection, speech rate, and optional LLM analysis (Ollama or OpenAI compatible)
-        to identify and rank high-virality highlights.
+        to identify and rank high-virality highlights. Incorporates stage-level performance timing instrumentation.
         """
         print("Starting Upgraded Highlight Detection Pipeline...")
+        t_start = time.perf_counter()
         
-        # 1. Extract audio
+        # 1 & 2. Audio Extraction and Energy Profiling
+        t0 = time.perf_counter()
         temp_wav = "temp_extraction.wav"
         audio_extracted = self.extract_audio(temp_wav)
         
-        # 2. Get audio energy
         rms_energy = []
         if audio_extracted:
             rms_energy = self.analyze_audio_energy(temp_wav, segment_duration=1.0)
+        t_audio = time.perf_counter() - t0
             
-        # 3. Get speech transcripts
+        # 3. Transcription Phase
+        t1 = time.perf_counter()
         transcripts = []
         if audio_extracted:
             if use_whisper:
                 transcripts = self.transcribe_with_faster_whisper(temp_wav, whisper_model=whisper_model)
             else:
                 transcripts = self.transcribe_audio_segments(temp_wav, segment_duration=15)
+        t_transcribe = time.perf_counter() - t1
             
-        # 4. Get motion scores
+        # 4. Motion Profiling (Spread over entire duration)
+        t2 = time.perf_counter()
         motion_scores = self.analyze_visual_motion()
+        t_motion = time.perf_counter() - t2
         
         # Clean up temp wave
         if os.path.exists(temp_wav):
@@ -355,7 +386,8 @@ class HighlightEngine:
             except:
                 pass
 
-        # 5. Generate candidates and calculate scores
+        # 5. Candidate Generation & Heuristic Scoring
+        t3 = time.perf_counter()
         candidates = []
         step = 10
         window_size = 20
@@ -405,9 +437,9 @@ class HighlightEngine:
             else:
                 lexical_score = 40
                 
-            # (c) Visual Motion Score (0 to 100)
+            # (c) Visual Motion Score (0 to 100) - Mapped to Timeline dict
             if motion_scores:
-                motion_sub = motion_scores[start:end] if len(motion_scores) >= end else []
+                motion_sub = [item["score"] for item in motion_scores if start <= item["time"] <= end]
                 if motion_sub:
                     motion_score = min(float(np.mean(motion_sub)) * 10, 100)
                 else:
@@ -467,8 +499,10 @@ class HighlightEngine:
                 unique_highlights.append(cand)
                 
         top_candidates = unique_highlights[:top_n]
+        t_heuristic = time.perf_counter() - t3
         
         # 7. Apply optional LLM semantic re-ranking pass on top candidates
+        t_llm_start = time.perf_counter()
         if llm_provider != "Off" and len(top_candidates) > 0:
             if llm_provider == "Ollama":
                 self.score_highlights_via_llm(
@@ -485,8 +519,23 @@ class HighlightEngine:
                     model=openai_model, 
                     api_key=openai_api_key
                 )
+        t_llm = time.perf_counter() - t_llm_start
             
         # Sort again since score was updated by LLM
         top_candidates = sorted(top_candidates, key=lambda x: x["score"], reverse=True)
+        
+        t_total = time.perf_counter() - t_start
+        
+        # Cache full timings in engine instance
+        self.last_timing = {
+            "audio_extract": round(t_audio, 2),
+            "transcribe": round(t_transcribe, 2),
+            "motion": round(t_motion, 2),
+            "heuristic_scoring": round(t_heuristic, 2),
+            "llm_rerank": round(t_llm, 2),
+            "total": round(t_total, 2)
+        }
+        
+        print(f"Timing: audio_extract={t_audio:.1f}s transcribe={t_transcribe:.1f}s motion={t_motion:.1f}s llm_rerank={t_llm:.1f}s total={t_total:.1f}s")
         
         return top_candidates

@@ -292,12 +292,14 @@ def analyze_video(req: AnalyzeRequest):
         )
         
         app_state["highlights"] = highlights
+        timing = getattr(engine, "last_timing", {})
         
         return {
             "status": "success",
             "video_name": app_state["current_video_name"],
             "duration": engine.duration,
-            "highlights": highlights
+            "highlights": highlights,
+            "timing": timing
         }
     except HTTPException as he:
         raise he

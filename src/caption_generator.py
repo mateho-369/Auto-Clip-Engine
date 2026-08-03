@@ -2,6 +2,7 @@ import cv2
 import os
 import math
 import numpy as np
+from src.utils import write_video_safely
 from moviepy import VideoFileClip
 
 class CaptionGenerator:
@@ -198,12 +199,7 @@ class CaptionGenerator:
                 audio = orig_cropped_clip.audio
                 with VideoFileClip(temp_silent_output) as captioned_silent:
                     final_clip = captioned_silent.with_audio(audio)
-                    final_clip.write_videofile(
-                        output_video_path,
-                        codec="libx264",
-                        audio_codec="aac",
-                        logger=None
-                    )
+                    write_video_safely(final_clip, output_video_path, audio_codec="aac")
             if os.path.exists(temp_silent_output):
                 os.remove(temp_silent_output)
             print("Captioned vertical video successfully generated!")

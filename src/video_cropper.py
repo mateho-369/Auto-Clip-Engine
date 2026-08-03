@@ -1,6 +1,7 @@
 import cv2
 import os
 import numpy as np
+from src.utils import write_video_safely
 from moviepy import VideoFileClip
 
 class VideoCropper:
@@ -198,12 +199,7 @@ class VideoCropper:
                 audio_subclip = full_video.audio.subclipped(start_time, end_time)
                 with VideoFileClip(temp_silent_path) as cropped_silent_clip:
                     final_clip = cropped_silent_clip.with_audio(audio_subclip)
-                    final_clip.write_videofile(
-                        output_video_path,
-                        codec="libx264",
-                        audio_codec="aac",
-                        logger=None
-                    )
+                    write_video_safely(final_clip, output_video_path, audio_codec="aac")
             if os.path.exists(temp_silent_path):
                 os.remove(temp_silent_path)
             print("Cropped vertical video rendered successfully with audio!")
