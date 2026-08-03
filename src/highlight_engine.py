@@ -41,6 +41,24 @@ if os.name == 'nt':
             os.environ['PATH'] = cudnn_path + os.pathsep + os.environ['PATH']
             print(f"Programmatically injected cudnn PATH: {cudnn_path}")
 
+        # PATH alone does not work here: ctranslate2's native loader on Windows uses
+        # LoadLibraryExW with LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, which does NOT consult
+        # the PATH env var — only the app directory, System32, and directories added via
+        # AddDllDirectory. Confirmed empirically: PATH-only injection still throws
+        # "Library cublas64_12.dll is not found or cannot be loaded"; add_dll_directory
+        # fixes it every time.
+        if hasattr(os, "add_dll_directory"):
+            if os.path.exists(cublas_path):
+                try:
+                    os.add_dll_directory(cublas_path)
+                except OSError:
+                    pass
+            if os.path.exists(cudnn_path):
+                try:
+                    os.add_dll_directory(cudnn_path)
+                except OSError:
+                    pass
+
 class HighlightEngine:
     def __init__(self, video_path):
         self.video_path = video_path

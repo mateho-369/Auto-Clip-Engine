@@ -121,6 +121,16 @@ def write_video_safely(clip, output_path, audio_codec="aac", **kwargs):
     """
     codec = get_best_available_codec()
     
+    # MoviePy only defaults pix_fmt to "yuv420p" for codecs in its own internal
+    # table (libx264, mpeg4, ...). It has no entry for the hardware encoders below,
+    # so without an explicit pix_fmt, ffmpeg auto-negotiates one against whatever
+    # the encoder advertises support for — confirmed empirically that h264_nvenc
+    # lands on "gbrp" (GBR planar) here, which standard players/browsers do not
+    # handle correctly: video renders with a green cast and audio silently fails.
+    # yuv420p is universally supported and must be forced explicitly.
+    ffmpeg_params = kwargs.pop("ffmpeg_params", [])
+    ffmpeg_params = ["-pix_fmt", "yuv420p"] + list(ffmpeg_params)
+
     if codec != "libx264":
         try:
             print(f"Attempting GPU acceleration ({codec}) for {output_path}...")
@@ -129,13 +139,14 @@ def write_video_safely(clip, output_path, audio_codec="aac", **kwargs):
                 codec=codec,
                 audio_codec=audio_codec,
                 logger=None,
+                ffmpeg_params=ffmpeg_params,
                 **kwargs
             )
             print("✔ GPU rendering completed successfully!")
             return True
         except Exception as e:
             print(f"⚠️ GPU acceleration ({codec}) failed: {e}. Falling back to CPU libx264...")
-            
+
     # CPU fallback
     print(f"Rendering {output_path} via CPU (libx264)...")
     try:
@@ -144,6 +155,7 @@ def write_video_safely(clip, output_path, audio_codec="aac", **kwargs):
             codec="libx264",
             audio_codec=audio_codec,
             logger=None,
+            ffmpeg_params=ffmpeg_params,
             **kwargs
         )
         return True
