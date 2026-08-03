@@ -86,7 +86,7 @@ class VoiceoverEngine:
                 if orig_audio is not None:
                     ducked_end = min(voice_dur, video.duration)
                     # Background is ducked while narrator speaks, then back to normal volume after
-                    full_bg_ducked = orig_audio.subclipped(0, ducked_end).multiply_volume(duck_ratio)
+                    full_bg_ducked = orig_audio.subclipped(0, ducked_end).with_volume_scaled(duck_ratio)
                     voice_track_positioned = voiceover_clip.with_start(0)
 
                     if video.duration > voice_dur:
