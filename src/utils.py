@@ -1,18 +1,16 @@
 import os
 import subprocess
+import platform
 
-_nvenc_available = None
+_selected_codec = None
 
 def has_nvidia_gpu():
     """Checks if a physical NVIDIA GPU is available on the host system."""
-    # On Linux, check for standard device nodes
     if os.path.exists("/dev/nvidia0") or os.path.exists("/dev/nvidiactl"):
         return True
-    # On Windows or generic, check if nvidia-smi command exists in PATH
     try:
         import shutil
         if shutil.which("nvidia-smi") is not None:
-            # Let's run a quick non-blocking nvidia-smi check to ensure driver is functional
             res = subprocess.run(["nvidia-smi"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2)
             if res.returncode == 0:
                 return True
@@ -20,49 +18,80 @@ def has_nvidia_gpu():
         pass
     return False
 
-def is_nvenc_available():
-    global _nvenc_available
-    if _nvenc_available is not None:
-        return _nvenc_available
+def get_best_available_codec():
+    """
+    Auto-detects the best available hardware-accelerated video codec 
+    on the workstation (NVIDIA, AMD, Intel, Apple Silicon, or CPU Fallback).
+    """
+    global _selected_codec
+    if _selected_codec is not None:
+        return _selected_codec
         
-    # Skip NVENC check completely if no physical NVIDIA GPU device is present (prevents driver-load hangs)
-    if not has_nvidia_gpu():
-        _nvenc_available = False
-        return False
-        
+    # Default standard CPU encoder
+    _selected_codec = "libx264"
+    
     try:
+        # 1. Probe FFmpeg's compiled encoders list
         cmd = ["ffmpeg", "-encoders"]
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
-        if "h264_nvenc" in res.stdout:
-            _nvenc_available = True
-            print("NVIDIA NVENC hardware acceleration detected and verified!")
-            return True
+        encoders = res.stdout
     except Exception as e:
-        print(f"Error checking NVENC encoders: {e}")
-    _nvenc_available = False
-    return False
+        print(f"Error checking FFmpeg encoders: {e}. Defaulting to libx264.")
+        return _selected_codec
+
+    sys_platform = platform.system()
+
+    # Priority A: Apple Silicon / macOS VideoToolbox
+    if "h264_videotoolbox" in encoders and sys_platform == "Darwin":
+        _selected_codec = "h264_videotoolbox"
+        print("✔ Apple VideoToolbox hardware acceleration detected!")
+        return _selected_codec
+
+    # Priority B: NVIDIA NVENC (Requires physical card verification to prevent driver hangs)
+    if "h264_nvenc" in encoders and has_nvidia_gpu():
+        _selected_codec = "h264_nvenc"
+        print("✔ NVIDIA NVENC hardware acceleration detected!")
+        return _selected_codec
+
+    # Priority C: AMD AMF (Native Windows AMD GPU acceleration for cards like Radeon RX / Ryzen iGPU)
+    if "h264_amf" in encoders and sys_platform == "Windows":
+        _selected_codec = "h264_amf"
+        print("✔ AMD AMF hardware acceleration detected! Optimizing render for AMD Radeon.")
+        return _selected_codec
+
+    # Priority D: Intel QuickSync Video (QSV)
+    if "h264_qsv" in encoders:
+        _selected_codec = "h264_qsv"
+        print("✔ Intel QuickSync (QSV) hardware acceleration detected!")
+        return _selected_codec
+
+    print("ℹ No compatible GPU hardware encoder verified. Using robust CPU rendering (libx264).")
+    return _selected_codec
 
 def write_video_safely(clip, output_path, audio_codec="aac", **kwargs):
     """
-    Writes a MoviePy video clip to disk, trying NVENC hardware encoding first
-    if available, with automatic, failsafe fallback to standard libx264 CPU encoding.
+    Writes a MoviePy video clip to disk, automatically using the best 
+    detected hardware encoder (NVIDIA, AMD, Intel, Apple) with a failsafe 
+    and robust fallback to libx264 CPU rendering.
     """
-    if is_nvenc_available():
+    codec = get_best_available_codec()
+    
+    if codec != "libx264":
         try:
-            print(f"Attempting GPU acceleration (NVENC) for {output_path}...")
+            print(f"Attempting GPU acceleration ({codec}) for {output_path}...")
             clip.write_videofile(
                 output_path,
-                codec="h264_nvenc",
+                codec=codec,
                 audio_codec=audio_codec,
                 logger=None,
                 **kwargs
             )
-            print("GPU render complete!")
+            print("✔ GPU rendering completed successfully!")
             return True
         except Exception as e:
-            print(f"NVENC hardware encoding failed ({e}). Falling back to libx264...")
+            print(f"⚠️ GPU acceleration ({codec}) failed: {e}. Falling back to CPU libx264...")
             
-    # Standard libx264 CPU fallback
+    # CPU fallback
     print(f"Rendering {output_path} via CPU (libx264)...")
     try:
         clip.write_videofile(
@@ -74,5 +103,5 @@ def write_video_safely(clip, output_path, audio_codec="aac", **kwargs):
         )
         return True
     except Exception as e:
-        print(f"CPU encoding failed: {e}")
+        print(f"❌ CPU rendering failed: {e}")
         return False
