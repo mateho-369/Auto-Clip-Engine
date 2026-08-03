@@ -199,7 +199,8 @@ class VideoCropper:
                 audio_subclip = full_video.audio.subclipped(start_time, end_time)
                 with VideoFileClip(temp_silent_path) as cropped_silent_clip:
                     final_clip = cropped_silent_clip.with_audio(audio_subclip)
-                    write_video_safely(final_clip, output_video_path, audio_codec="aac")
+                    if not write_video_safely(final_clip, output_video_path, audio_codec="aac"):
+                        raise IOError("write_video_safely failed (both NVENC and libx264 attempts)")
             if os.path.exists(temp_silent_path):
                 os.remove(temp_silent_path)
             print("Cropped vertical video rendered successfully with audio!")

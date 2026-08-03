@@ -199,7 +199,8 @@ class CaptionGenerator:
                 audio = orig_cropped_clip.audio
                 with VideoFileClip(temp_silent_output) as captioned_silent:
                     final_clip = captioned_silent.with_audio(audio)
-                    write_video_safely(final_clip, output_video_path, audio_codec="aac")
+                    if not write_video_safely(final_clip, output_video_path, audio_codec="aac"):
+                        raise IOError("write_video_safely failed (both NVENC and libx264 attempts)")
             if os.path.exists(temp_silent_output):
                 os.remove(temp_silent_output)
             print("Captioned vertical video successfully generated!")
