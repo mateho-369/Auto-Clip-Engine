@@ -471,7 +471,6 @@
         const playerSrc = document.getElementById('player-src');
         const renderedTitle = document.getElementById('rendered-title');
         const renderedDur = document.getElementById('rendered-dur');
-        const renderedCaps = document.getElementById('rendered-caps');
         const btnDownloadVideo = document.getElementById('btn-download-video');
         const btnDownloadSrt = document.getElementById('btn-download-srt');
 
@@ -953,8 +952,7 @@
         function showRenderedPreview(data) {
             renderedTitle.innerText = data.clip_filename;
             renderedDur.innerText = `${Math.round(data.duration)}s`;
-            renderedCaps.innerText = document.getElementById('select-caption-style').options[document.getElementById('select-caption-style').selectedIndex].text.split(' ')[1] || "Active";
-            
+
             playerSrc.src = data.download_url;
             outputPlayer.load();
             
