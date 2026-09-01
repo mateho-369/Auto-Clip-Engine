@@ -428,8 +428,8 @@ async def api_render(req: RenderRequest):
         voice_meta = VOICES.get(req.voice_id)
     elif char.get("voice_id"):
         voice_meta = VOICES.get(char["voice_id"])
-    if (req.width, req.height) not in ((720, 1280), (1080, 1920), (1280, 720)):
-        raise HTTPException(400, "Use 720x1280, 1080x1920 or 1280x720.")
+    if (req.width, req.height) not in ((480, 854), (720, 1280), (1080, 1920), (1280, 720)):
+        raise HTTPException(400, "Use 480x854, 720x1280, 1080x1920 or 1280x720.")
 
     job_id = str(uuid.uuid4())[:8]
     jobs[job_id] = {"status": "processing", "stage": "Starting render...", "progress": 0,

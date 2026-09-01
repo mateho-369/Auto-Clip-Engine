@@ -48,6 +48,7 @@
       <div class="row" style="margin-top:14px">
         <input type="text" id="char-name" class="input grow" placeholder="Character name (e.g. Mate)">
         <button class="btn btn-primary" id="btn-create-char">Create character</button>
+        <span id="char-msg" class="muted"></span>
       </div>
     </div>
 
@@ -160,6 +161,7 @@
         <label class="muted">Format</label>
         <select id="res-select" class="input">
           <option value="720x1280" selected>9:16 vertical · 720×1280</option>
+          <option value="480x854">9:16 vertical · 480×854 (fast preview)</option>
           <option value="1080x1920">9:16 vertical · 1080×1920</option>
           <option value="1280x720">16:9 landscape · 1280×720</option>
         </select>
@@ -179,6 +181,13 @@
         <button class="btn btn-primary btn-big" id="btn-render">🎬 Generate video</button>
         <span id="render-msg" class="muted"></span>
       </div>
+    </div>
+
+    <div id="tts-note" class="banner warn hidden" style="margin-top:14px">
+      ⚠️ No TTS engine is available right now (XTTS / Kokoro / gTTS all missing) — the video will
+      render <b>without narration audio</b> (SFX only). Install one for human-like speech:
+      <code>pip install kokoro-onnx</code> or <code>pip install TTS==0.26.2</code> (voice cloning),
+      then restart the server.
     </div>
 
     <div id="render-progress" class="card hidden">

@@ -151,12 +151,23 @@ def xtts_available():
         return False
     try:
         from TTS.api import TTS  # noqa: F401
-        import torch
+        import torch  # noqa: F401
         # model must be present locally (downloaded by setup script) — avoid
         # silently pulling 1.9GB at render time
-        from huggingface_hub import try_to_load_from_cache  # type: ignore
-        found = try_to_load_from_cache("hf.co", _XTTS_MODEL, "config.json") is not None or \
-                _XTTS_MODEL in os.listdir(os.path.expanduser("~/.cache")) if os.path.isdir(os.path.expanduser("~/.cache")) else False
+        found = False
+        try:
+            from huggingface_hub import try_to_load_from_cache  # type: ignore
+            found = try_to_load_from_cache("hf.co", _XTTS_MODEL, "config.json") is not None
+        except Exception:
+            found = False
+        if not found:
+            # fallback: scan the HF hub cache for the xtts_v2 repo dir
+            hub = os.path.expanduser("~/.cache/huggingface/hub")
+            if os.path.isdir(hub):
+                for entry in os.listdir(hub):
+                    if "xtts_v2" in entry and "tts_models" in entry:
+                        found = True
+                        break
         _xtts_failed = not (found or _env_forced())
         return not _xtts_failed
     except Exception:

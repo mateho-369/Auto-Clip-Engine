@@ -86,7 +86,9 @@ dz.addEventListener("drop", (e) => {
 });
 
 $("#btn-create-char").addEventListener("click", async () => {
-  if (!createFile) { flash($("#plan-msg"), "Pick a photo of your character first.", false); return; }
+  if (!createFile) { flash($("#char-msg"), "Pick a photo of your character first.", false); return; }
+  const btn = $("#btn-create-char");
+  btn.disabled = true;
   const fd = new FormData();
   fd.append("name", $("#char-name").value || "My Character");
   fd.append("file", createFile);
@@ -97,8 +99,12 @@ $("#btn-create-char").addEventListener("click", async () => {
     createFile = null;
     $("#char-name").value = "";
     $("#dz-create .dz-title").textContent = "Drop a photo of your character here";
+    $("#file-create").value = "";
+    flash($("#char-msg"), `Character "${r.character.name}" created — memory saved ✓`);
+    markStepsDone(2);
     gotoStep(2);
-  } catch (e) { alert(e.message); }
+  } catch (e) { flash($("#char-msg"), e.message, false); }
+  finally { btn.disabled = false; }
 });
 
 function charCard(c) {
@@ -164,6 +170,7 @@ async function loadCharacters() {
   state.characters = await api("/api/characters");
   if (state.characters.length && !state.activeCharId) state.activeCharId = state.characters[0].id;
   renderCharacters();
+  fillCharSelect();
 }
 function renderCharacters() {
   const grid = $("#char-list");
@@ -334,6 +341,11 @@ function fillCharSelect() {
     `<option value="${c.id}" ${c.id === state.activeCharId ? "selected" : ""}>${esc(c.name)}</option>`).join("");
   sel.disabled = !state.characters.length;
   sel.title = state.characters.length ? "" : "Create a character first (step 1)";
+  sel.onchange = (e) => { state.activeCharId = e.target.value; };
+}
+
+function markStepsDone(upTo) {
+  $$(".step").forEach((b) => b.classList.toggle("done", Number(b.dataset.step) < upTo));
 }
 
 $("#btn-plan").addEventListener("click", async () => {
@@ -350,6 +362,7 @@ $("#btn-plan").addEventListener("click", async () => {
     state.plan = plan;
     renderActivity(plan.activity || []);
     renderPlanEditor();
+    markStepsDone(4);
   } catch (e) {
     flash($("#plan-msg"), e.message, false);
   } finally {
@@ -465,6 +478,9 @@ function prepareRenderStep() {
   } else {
     $("#render-msg").textContent = `Plan: "${state.plan.title}" · ${state.plan.scenes.length} scenes · ~${state.plan.total_duration}s`;
   }
+  const st = state.status;
+  const hasVoice = st && st.tts && (st.tts.kokoro || st.tts.xtts || st.tts.gtts);
+  $("#tts-note").classList.toggle("hidden", !!hasVoice);
 }
 
 $("#btn-render").addEventListener("click", async () => {
@@ -489,9 +505,11 @@ $("#btn-render").addEventListener("click", async () => {
 
 function pollJob() {
   clearInterval(state.jobTimer);
+  let fails = 0;
   state.jobTimer = setInterval(async () => {
     try {
       const j = await api(`/api/jobs/${state.job}`);
+      fails = 0;
       $("#progress-bar").style.width = j.progress + "%";
       $("#progress-pct").textContent = j.progress + "%";
       $("#progress-stage").textContent = j.stage || "Working…";
@@ -502,22 +520,53 @@ function pollJob() {
         $("#result-video").src = j.result.download_url;
         $("#dl-mp4").href = j.result.download_url;
         $("#dl-srt").href = j.result.srt_url;
+        markStepsDone(5);
       } else if (j.status === "failed") {
         clearInterval(state.jobTimer);
         $("#btn-render").disabled = false;
         $("#progress-stage").textContent = "Render failed";
         alert("Render failed: " + (j.error || "unknown error"));
       }
-    } catch (e) { /* keep polling */ }
+    } catch (e) {
+      fails += 1;
+      // server may have restarted (jobs are in-memory) — stop instead of polling forever
+      if (fails >= 10) {
+        clearInterval(state.jobTimer);
+        $("#btn-render").disabled = false;
+        $("#progress-stage").textContent = "Lost contact with the render job — reload the page and generate again.";
+        $("#progress-pct").textContent = "";
+      }
+    }
   }, 1200);
 }
 $("#btn-again").addEventListener("click", () => gotoStep(3));
 
-/* ---------------- boot ---------------- */
+/* ---------------- boot (robust: one failed call must not kill the UI) ---------------- */
+async function tryLoad(fn, label) {
+  try { await fn(); return true; }
+  catch (e) { console.warn("boot:", label, "failed:", e.message); return false; }
+}
 (async function boot() {
-  await refreshStatus();
-  await Promise.all([loadCharacters(), loadVoices(), loadTeam(), loadModels()]);
-  state.sfx = await api("/api/sfx");
+  const first = await Promise.all([
+    tryLoad(refreshStatus, "status"),
+    tryLoad(loadCharacters, "characters"),
+    tryLoad(loadVoices, "voices"),
+    tryLoad(loadTeam, "team"),
+    tryLoad(loadModels, "models"),
+  ]);
+  await tryLoad(async () => { state.sfx = await api("/api/sfx"); }, "sfx");
   fillCharSelect();
+  if (first.some((ok) => !ok)) {
+    // retry the failed ones once after a short delay (server may still be warming up)
+    setTimeout(async () => {
+      await tryLoad(refreshStatus, "status(retry)");
+      await tryLoad(loadCharacters, "characters(retry)");
+      await tryLoad(loadVoices, "voices(retry)");
+      await tryLoad(loadTeam, "team(retry)");
+      await tryLoad(loadModels, "models(retry)");
+      await tryLoad(async () => { state.sfx = await api("/api/sfx"); }, "sfx(retry)");
+      fillCharSelect();
+    }, 2500);
+  }
   setInterval(refreshStatus, 15000);
 })();
