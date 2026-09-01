@@ -30,7 +30,19 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 app = FastAPI(title="AI Content Creator — Local AI + Bot Video Studio")
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+class NoCacheStaticFiles(StaticFiles):
+    """Serve static assets without browser caching so UI fixes appear instantly
+    (the default sets Cache-Control: max-age=3600, which served users stale JS)."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
+app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")
 
 CHARACTERS = CharacterStore(ROOT)
 VOICES = VoiceStore(ROOT)
@@ -61,7 +73,8 @@ def ollama_client():
 async def home():
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "index.html")
     if os.path.exists(path):
-        return FileResponse(path, media_type="text/html")
+        return FileResponse(path, media_type="text/html",
+                            headers={"Cache-Control": "no-cache, must-revalidate"})
     return {"message": "AI Content Creator running. UI template missing."}
 
 

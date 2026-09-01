@@ -41,10 +41,12 @@ function flash(el, msg, ok = true) {
 
 /* ---------------- steps ---------------- */
 function gotoStep(n) {
-  $$(".step").forEach((b) => b.classList.toggle("active", b.dataset.step === String(n)));
-  for (let i = 1; i <= 4; i++) $("#panel-" + i).classList.toggle("hidden", i !== n);
-  if (n === 2) renderTeamStep();
-  if (n === 4) prepareRenderStep();
+  const step = Number(n); // dataset values are strings — normalize before comparing
+  if (!step || step < 1 || step > 4) return;
+  $$(".step").forEach((b) => b.classList.toggle("active", b.dataset.step === String(step)));
+  for (let i = 1; i <= 4; i++) $("#panel-" + i).classList.toggle("hidden", i !== step);
+  if (step === 2) renderTeamStep();
+  if (step === 4) prepareRenderStep();
 }
 $$(".step").forEach((b) => b.addEventListener("click", () => gotoStep(b.dataset.step)));
 
@@ -284,21 +286,23 @@ $("#btn-refresh-models").addEventListener("click", async () => {
 
 function renderTeamStep() {
   if (!state.team) return;
-  $("#team-host").value = state.team.ollama_host;
+  $("#team-host").value = state.team.ollama_host || "http://localhost:11434";
   const grid = $("#role-cards");
   grid.innerHTML = "";
   const order = ["planner", "scriptwriter", "sfx_director", "animator", "qa"];
   order.forEach((role) => {
-    const cfg = state.team.roles[role];
+    const cfg = (state.team.roles && state.team.roles[role]) || { enabled: true, model: "llama3.2:3b", temperature: 0.7 };
+    const meta = (state.team.roles_meta || {})[role] || role;
+    const desc = (state.team.roles_desc || {})[role] || "";
     const card = document.createElement("div");
     card.className = "card role-card" + (role === "planner" ? " controller" : "");
     card.innerHTML = `
       <div class="role-top">
-        <span class="role-name">${role === "planner" ? "👑 " : ""}${esc(state.team.roles_meta[role])}</span>
+        <span class="role-name">${role === "planner" ? "👑 " : ""}${esc(meta)}</span>
         <label class="switch"><input type="checkbox" class="role-on" ${cfg.enabled ? "checked" : ""}>
         <span class="slider-ui"></span></label>
       </div>
-      <div class="role-desc">${esc(state.team.roles_desc[role])}</div>
+      <div class="role-desc">${esc(desc)}</div>
       <div class="role-ctrl">
         <select class="input role-model" style="flex:1">
           ${[cfg.model, ...state.models.filter((m) => m !== cfg.model)].map((m) =>
