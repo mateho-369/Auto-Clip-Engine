@@ -13,7 +13,7 @@ import threading
 from typing import Optional, List
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional as Opt
@@ -73,8 +73,16 @@ def ollama_client():
 async def home():
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "index.html")
     if os.path.exists(path):
-        return FileResponse(path, media_type="text/html",
-                            headers={"Cache-Control": "no-cache, must-revalidate"})
+        with open(path, "r", encoding="utf-8") as f:
+            html = f.read()
+        # version the asset URLs from file mtimes: any edit to app.js/style.css
+        # changes the URL, so browsers can NEVER serve a stale cached copy
+        js = os.path.join(STATIC_DIR, "app.js")
+        css = os.path.join(STATIC_DIR, "style.css")
+        v = int(max(os.path.getmtime(js), os.path.getmtime(css)))
+        html = html.replace('href="/static/style.css"', f'href="/static/style.css?v={v}"')
+        html = html.replace('src="/static/app.js"', f'src="/static/app.js?v={v}"')
+        return HTMLResponse(html, headers={"Cache-Control": "no-cache, must-revalidate"})
     return {"message": "AI Content Creator running. UI template missing."}
 
 
