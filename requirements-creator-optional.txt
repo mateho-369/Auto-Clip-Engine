@@ -1,0 +1,13 @@
+# AI Content Creator — OPTIONAL extras (voice cloning)
+#
+# Core studio (planner, character memory, SFX, animation, renderer, Kokoro/gTTS
+# voice) works with the base `requirements.txt` only.
+#
+# This file adds the Coqui TTS / XTTS v2 voice-cloning engine so the studio can
+# speak in YOUR voice from a ~1 minute recording. Pulls PyTorch (large).
+#
+#   ./venv/bin/pip install -r requirements-creator-optional.txt
+#   ./venv/bin/python -c "from TTS.api import TTS; TTS('tts_models/multilingual/multi-dataset/xtts_v2')"
+#
+# (The second command downloads the XTTS v2 weights once, ~1.9 GB.)
+TTS==0.26.2

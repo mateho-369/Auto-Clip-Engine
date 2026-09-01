@@ -1,122 +1,163 @@
-# ⚡ Global Highlights: Local Auto-Clip Engine (v3.0)
+# ✦ AI Content Creator — Local AI + Bot Video Studio
 
-Global Highlights is an advanced, workstation-grade local clipping engine that transforms long-form landscape videos (16:9) into viral, professional 9:16 vertical shorts optimized for YouTube Shorts, Instagram Reels, and Facebook Reels.
+Turn **one idea + one photo** into a finished vertical video where **your own character**
+explains everything — planned by a **team of local Ollama AIs that you personally assign**,
+narrated in **your cloned voice**, with animations, transitions, sound effects and karaoke
+captions. **100% local, 100% private.**
 
-This is **v3.0**, upgraded with an automated single-command setup, full CI verification pipelines, dynamic face-tracking, local speech-to-text, and local premium narration.
+This repo now contains two local studios:
 
----
-
-## 🚀 One-Command Local Setup (Linux / macOS)
-
-We have built a single, automated setup script that verifies your local system dependencies, installs Ollama model weight sets, fetches pre-trained face-tracking and TTS files, and prepares an isolated virtual environment.
-
-To setup and run the application instantly, execute:
-```bash
-./setup.sh
-```
-
-*(This command verifies ffmpeg, pulls the Llama 3.2 model, downloads MediaPipe/Kokoro files, creates `venv`, installs all pinned packages, and prints the startup instructions!)*
+| Project | Port | What it does |
+|---|---|---|
+| **AI Content Creator** (`ai_creator/`) — *new* | `8000` | AI-team planned character videos (this page) |
+| **Auto-Clip Engine v3.0** (`src/`) — legacy | `8001` | Clips viral highlights out of long videos (see [below](#-legacy-auto-clip-engine-v30)) |
 
 ---
 
-## 💻 Manual Step-by-Step Installation (Fallback / Windows)
+## 🚀 One-Command Setup (Linux / macOS)
 
-### 1. Install System Dependencies
-Make sure you have `ffmpeg` and `ffprobe` on your system.
 ```bash
-# On Debian/Ubuntu
-sudo apt update && sudo apt install -y ffmpeg
-
-# On macOS (using Homebrew)
-brew install ffmpeg
-
-# On Windows
-scoop install ffmpeg  # or using chocolatey: choco install ffmpeg
+./setup-creator.sh
 ```
 
-### 2. Set Up Local Ollama (Required for Semantic AI Pass)
-1. Download and run Ollama from [ollama.com](https://ollama.com).
-2. Pull the default 3B model in your terminal:
-   ```bash
-   ollama pull llama3.2:3b
-   ```
+This verifies ffmpeg, checks Ollama (pulls `llama3.2:3b`), downloads the local
+Kokoro-82M TTS weights, creates the venv, and offers two optional extras:
 
-### 3. Download Local Model Files
-To use local Kokoro TTS and MediaPipe face tracking:
+* **rembg** — real background removal for cleaner character cutouts
+* **TTS (XTTS v2)** — *voice cloning*: speaks in **your** voice from a ~1-minute recording (~2.5 GB, PyTorch)
+
+Then start the studio:
+
 ```bash
-# Download MediaPipe face detector model
-curl -L -o blaze_face_short_range.tflite https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite
-
-# Download Kokoro ONNX model and voices
-curl -L -o kokoro-v0_19.onnx https://github.com/thewhpoly/kokoro-onnx/releases/download/v0.2.0/kokoro-v0_19.onnx
-curl -L -o voices.bin https://github.com/thewhpoly/kokoro-onnx/releases/download/v0.2.0/voices.bin
+./venv/bin/python -m uvicorn ai_creator.app:app --host 0.0.0.0 --port 8000
 ```
 
-### 4. Setup Python Environment & Packages
-```bash
-# On Linux/macOS
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+Open **http://localhost:8000**.
 
-# On Windows (PowerShell)
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-### 5. Start the Web App
-```bash
-python3 -m uvicorn src.app:app --host 0.0.0.0 --port 8000 --reload
-```
-Navigate to **`http://localhost:8000`** in your browser.
+> **Windows:** install ffmpeg (scoop/choco), Ollama from ollama.com, create the venv,
+> `pip install -r requirements-dev.txt`, then run the same uvicorn command.
 
 ---
 
-## 🧪 Automated Testing & CI Verification
+## 🎬 How It Works — 4 Steps
 
-v3.0 is reinforced with a robust `pytest` test suite, verified by GitHub Actions.
+### Step 1 · Your Character (face & body memory)
+Upload one or more photos of your character (person, drawing, avatar, mascot).
+The studio extracts and **remembers** on disk (`characters/<id>/`):
 
-### Running Tests Locally
-To execute the automated test suite on your local workstation, run:
+* the **face region** + a perceptual face hash
+* the dominant **color palette**
+* the **body/full figure** (feathered cutout asset — `rembg` if installed, soft mask otherwise)
+
+Every future video re-uses the exact same character. Add more photos any time —
+the UI shows a "looks same / maybe / different" similarity verdict (face hash + palette distance).
+
+### Step 2 · AI Team (you choose who does what)
+A deliberately small team of **local Ollama models** — you assign **any installed model to each role**,
+and any role can be switched off:
+
+| Role | Job |
+|---|---|
+| 👑 **Planner / Director (Controller)** | Receives your idea, breaks it into scenes, **delegates tasks** to the other AIs |
+| ✍️ **Scriptwriter** | Writes/polishes the narration each scene speaks |
+| 🔊 **SFX Director** | Chooses which sound effect plays per scene and exactly when |
+| 🎞️ **Animator** | Picks character animations + scene transitions |
+| ✅ **QA Reviewer** *(optional)* | Reviews the plan for empty scripts, bad timing, repeated elements |
+
+With Ollama offline (or a role off), built-in deterministic fallbacks take over —
+the studio never dead-ends.
+
+### Step 3 · Create
+Type your idea, pick length (10–90 s) and style → **Run AI team**. You see the
+"AI team at work" feed (which model did what), then a fully **editable scene board**:
+script, SFX + timing, animation, transition, background, duration per scene.
+
+### Step 4 · Render
+One click composes everything locally: animated character (entry/exit/idle +
+**talk-pulse synced to the voice audio**), scene transitions (fade / slide / zoom / wipe),
+karaoke captions, the SFX mix, narration, then final H.264 MP4 + SRT.
+Formats: 720×1280, 1080×1920, 1280×720.
+
+## 🎙️ Voice (human-like, yours)
+
+1. **Voice cloning (best):** record/upload **30–60 s** of your voice in Step 1.
+   With the optional XTTS v2 engine installed, every narration speaks in **your** voice.
+2. **Kokoro-82M (local, default):** very human-like, weights included by the setup script,
+   pick a voice (Bella, Skye, Nicole, Michael, …).
+3. **gTTS (online fallback)** when neither is available.
+
+## 🔊 Sound Effects
+Nine SFX are **synthesized on your machine with numpy** (whoosh, pop, ding, click,
+riser, boom, applause, sparkle, typing) — zero downloads, works air-gapped.
+Drop your own `.wav` files into `sfx_library/` and they appear in the picker.
+
+## 🧪 Tests & CI
 ```bash
 PYTHONPATH=. ./venv/bin/pytest -v
 ```
+74 tests cover both projects: API endpoints, Ollama JSON extraction, team config,
+fallback planning, character memory, animation/transition math, SFX synthesis,
+full render integration (real MP4 + SRT produced), and graceful-degradation paths.
+GitHub Actions runs the whole suite on every push.
 
-This test suite covers:
-- **FastAPI Endpoints:** Health checks, response shapes, and state transitions using `TestClient`.
-- **Numpy Scalar Guard:** Verifies all public scoring values return native Python floats (never numpy types) to prevent API serialization crashes.
-- **Cascade Classifier Assertions:** Validates that frontal face cascades load correctly without silent failures.
-- **Graceful Degradation:** Mocks Ollama and Kokoro failure modes to prove the pipeline continues running correctly even when offline.
-- **Integration Pipeline:** Generates a 2-second synthetic video with audio, performs vertical face crop and audio merge, and asserts the final vertical video has non-zero-duration audio.
+## 📁 Layout
+```
+ai_creator/            # NEW studio
+  app.py               # FastAPI server + API
+  planner.py           # controller-AI pipeline (plan -> delegate -> validate)
+  team.py              # role -> model assignment
+  ollama_client.py     # local Ollama client + robust JSON extraction
+  character.py         # face/body memory, palette, similarity, cutout assets
+  voice.py             # voice store + Kokoro / XTTS clone / gTTS
+  sfx.py               # offline SFX synthesizer + library
+  animation.py         # entry/exit/idle/talk-pulse transforms
+  transitions.py       # fade/slide/zoom/wipe blending
+  renderer.py          # scene composer + audio mixer + final encode
+  templates/, static/  # the studio UI
+src/                   # legacy Auto-Clip Engine (unchanged)
+tests/                 # pytest suite (both projects)
+```
 
----
-
-## 🛠️ Workstation-Grade System Stack
-
-### 1. Semantic Highlight Detection (Local LLM Re-Ranking)
-- **Our Selection:** Multi-Modal Peak Signal Analysis + **Ollama Llama 3.2 (3B)**.
-- **How it works:** Candidates are generated via heuristic signal peaks, then the top performing segments are evaluated semantically by Llama 3.2 running on your local machine to score humor and story structure. Blended score combines physical audio peaks (40%) and semantic wisdom (60%).
-- **Graceful Fallback:** If Ollama is offline or uninstalled, the app automatically switches to local heuristic evaluation without crashing.
-
-### 2. High-Accuracy Transcription (Local Offline Whisper)
-- **Our Selection:** `faster-whisper` (utilizing a local `tiny` or `base` model on CPU/CUDA).
-- **Why:** 100% offline, zero cloud rate-limits, and near-perfect segment/word alignment. Automatically prefers GPU (CUDA) if available.
-
-### 3. Premium Voiceover (Local Kokoro-82M TTS)
-- **Our Selection:** `kokoro-onnx` (small, Apache-2.0, CPU-friendly) using premium model voices (`af_bella`, `am_adam`, `bf_emma`, `bm_george`).
-- **Why:** Incredible human-like tone, 100% private. Ducking engine dims background video audio to 25% while the narrator speaks.
-
-### 4. Advanced Crop Tracking (MediaPipe Local Face Detection)
-- **Our Selection:** MediaPipe Tasks FaceDetector (`blaze_face_short_range.tflite`) + Exponential Moving Average (EMA) Motion Smoothing.
-- **Why:** High precision face tracking. If face tracking is momentarily obscured, the system falls back to Haar Cascades, and drifts back gracefully toward center (Cinematic Glide) rather than jumping.
+**Privacy:** everything runs on your machine — Ollama LLMs, Kokoro/XTTS TTS,
+numpy SFX, OpenCV/moviepy rendering. Nothing is uploaded anywhere
+(gTTS is only used if you enable it and it needs the internet).
 
 ---
 
-## 🛡️ Monetization & Compliance (Section 3 Guardrails)
+# ⚡ Legacy: Auto-Clip Engine v3.0
 
-YouTube and Facebook enforce strict rules against raw compilation channels.
-This engine features an **in-app Compliance Checklist** that remains locked until the creator verifies:
-1. **Ownership/Licensing:** User represents they own the raw footage or hold a clear commercial license.
-2. **Transformative Value:** The engine applies animated dynamic captions, smart vertical crops, and customizable AI voiceovers, ensuring editorial/format transformation that complies with monetization policies.
-3. **No Unlicensed Scraping:** Built-in workflows are gated, preventing illegal re-hosting or platform scraper violations.
+The original **Global Highlights** clipping engine: long 16:9 videos → viral 9:16
+shorts with face tracking, local Whisper transcription, LLM re-ranking, Kokoro
+narration and animated captions.
+
+## Run it
+```bash
+./setup.sh    # one-command setup (ffmpeg check, Ollama model, MediaPipe/Kokoro weights, venv)
+./venv/bin/python -m uvicorn src.app:app --host 0.0.0.0 --port 8001 --reload
+```
+
+## Manual installation (Windows / fallback)
+1. **ffmpeg**: `scoop install ffmpeg` (Windows) / `brew install ffmpeg` (macOS) / `sudo apt install ffmpeg` (Debian)
+2. **Ollama**: install from [ollama.com](https://ollama.com), then `ollama pull llama3.2:3b`
+3. **Local model files**:
+   ```bash
+   curl -L -o blaze_face_short_range.tflite https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite
+   curl -L -o kokoro-v0_19.onnx https://github.com/thewhpoly/kokoro-onnx/releases/download/v0.2.0/kokoro-v0_19.onnx
+   curl -L -o voices.bin https://github.com/thewhpoly/kokoro-onnx/releases/download/v0.2.0/voices.bin
+   ```
+4. **Python env**:
+   ```bash
+   python -m venv venv
+   .\venv\Scripts\Activate.ps1   # Windows   (Linux/macOS: source venv/bin/activate)
+   pip install -r requirements.txt
+   ```
+
+## Feature stack
+* **Semantic highlight detection** — multi-modal peak signal analysis + Ollama Llama 3.2 re-ranking (40/60 blend), graceful heuristic fallback
+* **Local transcription** — `faster-whisper` (tiny/base, GPU auto-fallback to CPU)
+* **Premium voiceover** — Kokoro-82M ONNX, audio ducking to 25% under narration
+* **Face tracking** — MediaPipe `blaze_face_short_range` + EMA smoothing, Haar-cascade fallback with cinematic center-drift
+
+## Compliance guardrails
+The app includes an in-app checklist: ownership/licensing declaration, transformative
+value (animated captions, smart crops, AI voiceover), no unlicensed scraping.
