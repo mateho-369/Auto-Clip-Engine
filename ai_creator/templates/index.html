@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Content Creator — Local Studio</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-logo">✦</div>
+    <div>
+      <div class="brand-name">AI Content Creator</div>
+      <div class="brand-sub">Local AI + Bot Video Studio</div>
+    </div>
+  </div>
+  <div class="status-pills">
+    <span id="pill-ollama" class="pill pill-off">Ollama — checking…</span>
+    <span id="pill-tts" class="pill pill-off">Voice — checking…</span>
+    <span class="pill pill-local">100% local</span>
+  </div>
+</header>
+
+<nav class="steps" id="steps">
+  <button class="step active" data-step="1"><span class="step-num">1</span> Character</button>
+  <button class="step" data-step="2"><span class="step-num">2</span> AI Team</button>
+  <button class="step" data-step="3"><span class="step-num">3</span> Create</button>
+  <button class="step" data-step="4"><span class="step-num">4</span> Render</button>
+</nav>
+
+<main>
+  <!-- ============ STEP 1: CHARACTER ============ -->
+  <section class="panel" id="panel-1">
+    <div class="panel-head">
+      <h1>Your Character</h1>
+      <p>Train your on-screen character from photos. The studio <b>remembers its face and body</b> —
+      every new video re-uses the exact same character.</p>
+    </div>
+
+    <div id="char-create" class="card dropzone-card">
+      <div class="dz" id="dz-create">
+        <div class="dz-icon">📸</div>
+        <div class="dz-title">Drop a photo of your character here</div>
+        <div class="dz-sub">Person, drawing, avatar or mascot — JPG / PNG / WEBP</div>
+        <label class="btn btn-ghost">Browse files<input type="file" id="file-create" accept="image/*" hidden></label>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <input type="text" id="char-name" class="input grow" placeholder="Character name (e.g. Mate)">
+        <button class="btn btn-primary" id="btn-create-char">Create character</button>
+      </div>
+    </div>
+
+    <div id="char-list" class="char-grid" style="display:none">
+      <!-- character cards injected here -->
+    </div>
+
+    <div class="card" style="margin-top:18px">
+      <h2>🎙️ Voice — human-like, yours</h2>
+      <p class="muted">Upload a <b>30–60 second recording of your voice</b> (or use the mic).
+      When the local <b>XTTS v2</b> clone engine is installed it clones that exact voice.
+      Otherwise Kokoro-82M / gTTS are used automatically.</p>
+      <div class="row" style="margin-top:10px">
+        <button class="btn btn-ghost" id="btn-mic">🎤 Record voice</button>
+        <span id="rec-status" class="muted"></span>
+        <label class="btn btn-ghost">Upload recording<input type="file" id="file-voice" accept="audio/*,.webm" hidden></label>
+      </div>
+      <div id="voice-list" class="voice-list"></div>
+    </div>
+  </section>
+
+  <!-- ============ STEP 2: AI TEAM ============ -->
+  <section class="panel hidden" id="panel-2">
+    <div class="panel-head">
+      <h1>AI Team</h1>
+      <p>Small, powerful team — <b>you choose which local Ollama model does what</b>.
+      The <b>Controller</b> receives your idea and delegates tasks to the other roles.
+      Switch any role off; built-in fallbacks keep the studio working even fully offline.</p>
+    </div>
+
+    <div class="card">
+      <div class="row wrap">
+        <label class="muted">Ollama host</label>
+        <input type="text" id="team-host" class="input" value="http://localhost:11434">
+        <button class="btn btn-ghost" id="btn-refresh-models">↻ Refresh models</button>
+        <span id="model-count" class="muted"></span>
+      </div>
+      <div id="model-chips" class="chips"></div>
+      <div id="ollama-offline-banner" class="banner warn hidden">
+        ⚠️ Ollama is offline. The studio runs in <b>template fallback mode</b> — plans are generated
+        without AI. Start it with <code>ollama serve</code> and pull a model
+        (<code>ollama pull llama3.2:3b</code>), then refresh.
+      </div>
+    </div>
+
+    <div id="role-cards" class="role-grid"></div>
+
+    <div class="row" style="margin-top:16px">
+      <button class="btn btn-primary" id="btn-save-team">💾 Save AI team</button>
+      <span id="team-save-msg" class="muted"></span>
+    </div>
+  </section>
+
+  <!-- ============ STEP 3: CREATE ============ -->
+  <section class="panel hidden" id="panel-3">
+    <div class="panel-head">
+      <h1>Create</h1>
+      <p>Describe your idea. The <b>Controller AI plans the video and delegates</b>:
+      scriptwriting → SFX direction → animation → QA. You can edit every scene before rendering.</p>
+    </div>
+
+    <div class="card">
+      <textarea id="idea" class="input" rows="3"
+        placeholder="e.g. Explain in 30 seconds why everyone should drink more water — with a funny twist at the end"></textarea>
+      <div class="row wrap" style="margin-top:12px">
+        <label class="muted">Length <b id="dur-label">25s</b></label>
+        <input type="range" id="duration" min="10" max="90" value="25" class="grow" style="max-width:260px">
+        <label class="muted">Style</label>
+        <div class="chips" id="style-chips">
+          <button class="chip active" data-style="punchy, energetic, short-form">Punchy</button>
+          <button class="chip" data-style="calm, educational, clear">Educational</button>
+          <button class="chip" data-style="storytelling, emotional, cinematic">Story</button>
+          <button class="chip" data-style="hype, epic, high energy">Epic</button>
+        </div>
+        <label class="muted">Star</label>
+        <select id="select-char" class="input"></select>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn btn-primary btn-big" id="btn-plan">🧠 Run AI team — plan my video</button>
+        <span id="plan-msg" class="muted"></span>
+      </div>
+    </div>
+
+    <div id="team-activity" class="activity hidden">
+      <h2>AI team at work</h2>
+      <div id="activity-log" class="activity-log"></div>
+    </div>
+
+    <div id="plan-editor" class="hidden">
+      <div class="row wrap">
+        <input type="text" id="plan-title" class="input grow" placeholder="Video title">
+        <span id="plan-total" class="badge"></span>
+        <button class="btn btn-ghost" id="btn-add-scene">＋ Add scene</button>
+        <button class="btn btn-primary" id="btn-save-plan">💾 Save plan</button>
+        <span id="plan-save-msg" class="muted"></span>
+      </div>
+      <div id="scene-cards" class="scene-grid"></div>
+    </div>
+  </section>
+
+  <!-- ============ STEP 4: RENDER ============ -->
+  <section class="panel hidden" id="panel-4">
+    <div class="panel-head">
+      <h1>Render</h1>
+      <p>Compose scenes, blend transitions, synthesize voice + SFX and encode the final video — all on your machine.</p>
+    </div>
+
+    <div class="card" id="render-settings">
+      <div class="row wrap">
+        <label class="muted">Format</label>
+        <select id="res-select" class="input">
+          <option value="720x1280" selected>9:16 vertical · 720×1280</option>
+          <option value="1080x1920">9:16 vertical · 1080×1920</option>
+          <option value="1280x720">16:9 landscape · 1280×720</option>
+        </select>
+        <label class="muted">Narration voice</label>
+        <select id="voice-select" class="input"></select>
+        <label class="muted">Kokoro voice (if no clone)</label>
+        <select id="kokoro-select" class="input">
+          <option value="af_bella" selected>Bella (af_bella)</option>
+          <option value="af_skye">Skye (af_skye)</option>
+          <option value="af_nicole">Nicole (af_nicole)</option>
+          <option value="am_michael">Michael (am_michael)</option>
+          <option value="am_echo">Echo (am_echo)</option>
+          <option value="am_fenrir">Fenrir (am_fenrir)</option>
+        </select>
+      </div>
+      <div class="row" style="margin-top:16px">
+        <button class="btn btn-primary btn-big" id="btn-render">🎬 Generate video</button>
+        <span id="render-msg" class="muted"></span>
+      </div>
+    </div>
+
+    <div id="render-progress" class="card hidden">
+      <h2 id="progress-stage">Starting…</h2>
+      <div class="progress"><div class="progress-bar" id="progress-bar"></div></div>
+      <div id="progress-pct" class="muted">0%</div>
+    </div>
+
+    <div id="render-result" class="card hidden">
+      <h2>🎉 Your video is ready</h2>
+      <video id="result-video" controls style="max-width:420px; width:100%; border-radius:14px;"></video>
+      <div class="row" style="margin-top:14px">
+        <a class="btn btn-primary" id="dl-mp4" download>⬇ Download MP4</a>
+        <a class="btn btn-ghost" id="dl-srt" download>⬇ Download SRT</a>
+        <button class="btn btn-ghost" id="btn-again">＋ Make another</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<template id="tpl-voice-row">
+  <div class="voice-row">
+    <span class="voice-name"></span>
+    <span class="voice-meta muted"></span>
+    <button class="btn btn-ghost btn-sm play">▶ Preview</button>
+    <button class="btn btn-ghost btn-sm del">✕</button>
+  </div>
+</template>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

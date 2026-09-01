@@ -19,3 +19,12 @@ temp_*.mp4
 *.bin
 *.tflite
 config.json
+
+# AI Content Creator runtime
+characters/
+voices/
+plans/
+outputs/
+work/
+sfx_library/
+team_config.json
