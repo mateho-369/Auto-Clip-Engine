@@ -2,7 +2,8 @@
 
 This explains *why* the code is shaped the way it is, so you can find your
 way around without re-reading every file. For *running* the thing, see
-[`HOW-TO-RUN.md`](HOW-TO-RUN.md).
+[`HOW-TO-RUN.md`](HOW-TO-RUN.md). For *using* the app once it's running,
+see [`USER-GUIDE.md`](USER-GUIDE.md).
 
 ## In one sentence
 

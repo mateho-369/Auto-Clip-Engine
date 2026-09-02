@@ -4,6 +4,8 @@ This is the practical runbook: what to start, in what order, on what port, and
 how to tell it's actually working (not just "the process didn't crash").
 
 For *why* it's built this way, see [`ARCHITECTURE.md`](ARCHITECTURE.md).
+For how to actually *use* the app once it's running, see
+[`USER-GUIDE.md`](USER-GUIDE.md).
 
 ## The four things that need to be running
 
