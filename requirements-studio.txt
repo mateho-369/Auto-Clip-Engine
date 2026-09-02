@@ -1,0 +1,34 @@
+# Khmer AI Content Studio — backend requirements.
+#
+# Deliberately small: the studio only needs a web stack plus numpy/PIL for its
+# fallback renderers. The heavy models (Ollama, ComfyUI/Wan, MMAudio, RVC,
+# sherpa-onnx) run as *separate local services*, so they are NOT pip deps —
+# see README-STUDIO.md for installing each one.
+#
+#   python -m pip install -r requirements-studio.txt
+#
+# If you also want the legacy `ai_creator/` studio in the same venv, install
+# requirements.txt as well (the two share only `ai_creator.ollama_client`
+# and `ai_creator.voice`, both of which import lazily).
+
+fastapi==0.141.1
+uvicorn[standard]==0.52.0          # [standard] brings websockets for /api/runs/{id}/events
+python-multipart==0.0.32           # UploadFile: RVC voice .zip / model imports
+numpy==2.4.4
+pillow==10.4.0                     # previz frames + thumbnails
+imageio-ffmpeg==0.6.0              # bundled ffmpeg binary when none is on PATH
+
+# ---------------------------------------------------------------------------
+# Optional, per machine — the studio detects each of these and degrades to a
+# CPU fallback instead of failing, so install only what you need.
+#
+#   sherpa-onnx          Stage 3a: real Khmer speech (run scripts/setup_khmer_tts.sh)
+#   onnx scipy Cython    only to convert the MMS checkpoint (scripts/vits-mms-export.py)
+#   torch                CPU wheel only for that conversion; the studio never needs it
+#   piper-tts            alternative VITS engine (no Khmer voice exists; English only)
+#   httpx                used by the API tests (pytest)
+#
+# Tests (CI installs these):
+#   pytest==8.4.2
+#   httpx==0.28.1
+# ---------------------------------------------------------------------------

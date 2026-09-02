@@ -5,12 +5,28 @@ explains everything — planned by a **team of local Ollama AIs that you persona
 narrated in **your cloned voice**, with animations, transitions, sound effects and karaoke
 captions. **100% local, 100% private.**
 
-This repo now contains two local studios:
+This repo now contains three local studios:
 
 | Project | Port | What it does |
 |---|---|---|
-| **AI Content Creator** (`ai_creator/`) — *new* | `8000` | AI-team planned character videos (this page) |
+| **Khmer AI Content Studio** (`ai_studio/`) — *new, flagship* | `8000` | Director-led multi-agent **video** pipeline: your Khmer script (or a topic) → scenes → Khmer voice → your RVC timbre → Wan 480p footage → MMAudio ambience → QA → final `.mp4`. **→ [README-STUDIO.md](README-STUDIO.md)** |
+| **AI Content Creator** (`ai_creator/`) | `8000` | AI-team planned character videos (this page) — run it on `--port 8002` if the studio above is up |
 | **Auto-Clip Engine v3.0** (`src/`) — legacy | `8001` | Clips viral highlights out of long videos (see [below](#-legacy-auto-clip-engine-v30)) |
+
+### 🎬 Khmer AI Content Studio (new)
+
+```bash
+./setup-studio.sh              # venv + deps + folders + a readiness report that tells you what to install next
+python -m ai_studio --check    # just the report
+python -m ai_studio --demo     # http://localhost:8000 — live per-stage stepper, all local, no cloud
+```
+
+Two entry modes: **A** = you paste the script and it is treated as inviolable ground truth
+(only mechanical scene segmentation); **B** = the Controller writes the Khmer script for a
+topic and waits for you to approve it. Full setup for Ollama (`sailor2:8b`), the
+sherpa-onnx Khmer voice, RVC voice training, ComfyUI + Wan + MMAudio, and the 8 GB VRAM
+safety rules: **[README-STUDIO.md](README-STUDIO.md)**. Works on Machine B too — script,
+voice and assembly run there, the GPU stages defer to Machine A. Windows: `setup-studio.ps1`.
 
 ---
 
@@ -95,14 +111,27 @@ Drop your own `.wav` files into `sfx_library/` and they appear in the picker.
 ```bash
 PYTHONPATH=. ./venv/bin/pytest -v
 ```
-74 tests cover both projects: API endpoints, Ollama JSON extraction, team config,
+123 tests cover all three projects: API endpoints, Ollama JSON extraction, team config,
 fallback planning, character memory, animation/transition math, SFX synthesis,
-full render integration (real MP4 + SRT produced), and graceful-degradation paths.
+full render integration (real MP4 + SRT produced), and graceful-degradation paths — plus
+47 for the Khmer studio (Khmer text handling, the stage DAG, resume/regeneration, a real
+7-stage run producing a playable MP4, the VRAM clamps, and the whole HTTP surface).
 GitHub Actions runs the whole suite on every push.
 
 ## 📁 Layout
 ```
-ai_creator/            # NEW studio
+ai_studio/             # KHMER AI CONTENT STUDIO (flagship — see README-STUDIO.md)
+  app.py, api.py       # FastAPI app + the whole REST/WS surface
+  config.py            # machine profiles, role→model map, VRAM safety, settings.json
+  db.py                # SQLite history: projects, scenes, runs, stage rows, assets, prompts, events
+  pipeline/            # spec.py (stage DAG) · scheduler.py (async queue, retry, resume) · stages.py · context.py
+  agents/              # controller.py (scene breakdown) · auto_idea.py (Mode B script) · qa.py
+  engines/             # tts.py (sherpa-onnx) · rvc.py · video.py (ComfyUI/Wan) · sfx.py (MMAudio) · assembly.py
+  previz.py, ambience.py, media.py, vram.py   # CPU fallback renderers, ffmpeg helpers, VRAM guard
+  workflows/           # ComfyUI API-format JSON templates (bring your own)
+  static/              # the studio UI (dashboard + live stepper + per-scene inspector)
+  demo.py              # sample projects + a service-free end-to-end smoke run
+ai_creator/            # earlier studio
   app.py               # FastAPI server + API
   planner.py           # controller-AI pipeline (plan -> delegate -> validate)
   team.py              # role -> model assignment
@@ -115,7 +144,7 @@ ai_creator/            # NEW studio
   renderer.py          # scene composer + audio mixer + final encode
   templates/, static/  # the studio UI
 src/                   # legacy Auto-Clip Engine (unchanged)
-tests/                 # pytest suite (both projects)
+tests/                 # pytest suite (all three projects)
 ```
 
 **Privacy:** everything runs on your machine — Ollama LLMs, Kokoro/XTTS TTS,

@@ -28,3 +28,10 @@ outputs/
 work/
 sfx_library/
 team_config.json
+
+# Khmer AI Content Studio runtime — everything (db, media, settings) lives here
+# and is reproducible from a project + the AI services, so it never belongs in git.
+data/studio/
+data/studio.*/
+models/
+.venv-studio/

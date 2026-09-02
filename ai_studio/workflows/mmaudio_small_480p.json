@@ -1,0 +1,39 @@
+{
+  "1": {
+    "class_type": "MMAudioLoader",
+    "inputs": {
+      "mmaudio_name": "mmaudio_small_08_44k_v2_fp16.safetensors",
+      "vae_name": "mmaudio_vae_44k_fp16.safetensors",
+      "synchformer_name": "mmaudio_synchformer_fp16.safetensors",
+      "clip_name": "apple_DFN5B-CLIP-ViT-H-14-384_fp16.safetensors",
+      "precision": "fp16"
+    }
+  },
+  "2": {
+    "class_type": "LoadVideo",
+    "inputs": {
+      "file": "{{VIDEO_PATH}}"
+    }
+  },
+  "3": {
+    "class_type": "MMAudio",
+    "inputs": {
+      "mmaudio": ["1", 0],
+      "video": ["2", 0],
+      "prompt": "{{SFX_PROMPT}}",
+      "negative_prompt": "{{NEGATIVE}}",
+      "duration": "{{DURATION}}",
+      "steps": "{{STEPS}}",
+      "cfg": "{{CFG}}",
+      "seed": "{{SEED}}"
+    }
+  },
+  "4": {
+    "class_type": "SaveAudio",
+    "inputs": {
+      "audio": ["3", 0],
+      "sample_rate": "{{SAMPLE_RATE}}",
+      "filename_prefix": "{{OUT_PREFIX}}"
+    }
+  }
+}
