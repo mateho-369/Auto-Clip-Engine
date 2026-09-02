@@ -56,7 +56,7 @@ def _mmaudio(video_path, out_wav, scene, cfg, target_duration, progress, seed):
     if not client.is_online():
         return {"ok": False, **out, "reason": f"ComfyUI not reachable at {host}", "attempted": False}
     try:
-        wf_path, template, _ = workflows.resolve_workflow(s.get("workflow"), cfg)
+        wf_path, template, _ = workflows.resolve_workflow(s.get("workflow"), cfg, default="mmaudio_small_480p")
     except Exception as e:
         return {"ok": False, **out, "reason": f"workflow: {e}"}
     dur = float(target_duration) + float(s.get("duration_pad_sec", 0.35))
@@ -134,7 +134,7 @@ def probe(cfg, plan=None):
     out = {"engine": (plan or {}).get("sfx", {}).get("engine"), "workflow": s.get("workflow"),
            "duck_gain": s.get("voice_duck_gain")}
     try:
-        _p, wf, _ = workflows.resolve_workflow(s.get("workflow"), cfg)
+        _p, wf, _ = workflows.resolve_workflow(s.get("workflow"), cfg, default="mmaudio_small_480p")
         out["placeholders"] = workflows.template_placeholders(wf)
     except Exception as e:
         out["workflow_error"] = str(e)[:180]

@@ -95,7 +95,8 @@ def _comfyui(scene, out_path, cfg, target_duration, progress, seed, reference_im
     if notes and progress:
         progress(2.0, "VRAM guard: " + "; ".join(notes))
     try:
-        wf_path, template, _ = workflows.resolve_workflow(v.get("workflow"), cfg)
+        wf_path, template, _ = workflows.resolve_workflow(
+            v.get("workflow"), cfg, default="wan2.1_t2v_1.3b_480p")
     except Exception as e:
         return {"ok": False, "engine": "comfyui", "reason": f"workflow: {e}"}
     prefix = "ai_studio/" + os.path.splitext(os.path.basename(out_path))[0]

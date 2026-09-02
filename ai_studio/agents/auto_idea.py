@@ -51,7 +51,19 @@ async def generate(llm, topic_hint, cfg, style_notes="", regenerate_note=""):
                               validate=script_validator(min_chars=30))
     if not data:
         return _fallback(topic, cfg, f"LLM unavailable ({meta.get('reason', 'no answer')})")
-    script = khmer.normalize_block(data.get("script") or "")
+    # normalize_block alone keeps whatever markdown the model added (it's the
+    # same function Mode A uses for the Director's own pasted script, where
+    # preserving exact formatting is the whole point — wrong tool here: this
+    # is AI-authored text meant to be spoken/captioned, so **bold**, `code`,
+    # #headings etc. must go. strip_emoji_and_marks does that but collapses
+    # all whitespace including newlines, which would merge every scene line
+    # into one — clean each line individually instead, to keep the one
+    # line = one scene structure the rest of this function depends on.
+    raw_script = khmer.normalize_block(data.get("script") or "")
+    script = "\n".join(
+        cleaned for ln in raw_script.split("\n")
+        if (cleaned := khmer.strip_emoji_and_marks(ln))
+    )
     ratio = _khmer_ratio(script)
     if ratio < 0.55:
         notes.append(f"first draft was only {int(ratio * 100)}% Khmer — retrying once")

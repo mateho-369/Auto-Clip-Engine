@@ -14,6 +14,7 @@ Placeholders may be the whole string value (replaced with a typed
 int/float/bool/list) or embedded inside it (string-substituted).
 """
 import copy
+import json
 import os
 import re
 
@@ -59,8 +60,13 @@ def search_dirs(cfg=None):
     return dirs
 
 
-def resolve_workflow(name_or_path, cfg=None):
-    """'wan2.1_t2v_1.3b_480p' | 'name.json' | absolute path → (path, workflow_dict)."""
+def resolve_workflow(name_or_path, cfg=None, default=None):
+    """'wan2.1_t2v_1.3b_480p' | 'name.json' | absolute path → (path, workflow_dict).
+
+    An empty ``name_or_path`` means "built-in default" (that's what the
+    settings UI's blank dropdown option submits) — falls back to ``default``.
+    """
+    name_or_path = name_or_path or default
     cand = [name_or_path] if name_or_path and os.path.isabs(str(name_or_path)) else []
     base = str(name_or_path or "").strip()
     for d in search_dirs(cfg):

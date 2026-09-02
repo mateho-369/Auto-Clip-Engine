@@ -114,7 +114,12 @@ def _sherpa_tts(cfg, model_onnx, tokens, model_dir):
     if os.path.isdir(espeak):
         vits_kwargs["data_dir"] = espeak
     vits_kwargs["noise_scale"] = 0.667
-    vits_kwargs["noise_scale_dur"] = 0.8
+    # The installed sherpa-onnx (1.13.7)'s OfflineTtsVitsModelConfig ctor
+    # takes `noise_scale_w`, not `noise_scale_dur` — the old kwarg name made
+    # every real-model call raise "incompatible constructor arguments" and
+    # silently fall back to the placeholder voice (confirmed: this was the
+    # actual reason real TTS never fired once the model was installed).
+    vits_kwargs["noise_scale_w"] = 0.8
     num_threads = int(os.cpu_count() or 4)
     num_threads = max(1, min(4, num_threads // 2))       # leave RAM/cores for ffmpeg
     kwargs_list = [

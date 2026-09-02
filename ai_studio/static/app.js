@@ -676,6 +676,7 @@ async function renderInspector() {
         ${a[kind].url && (kind.startsWith('voice') || kind === 'ambient') ? `<button class="btn tiny" data-wave="${esc(a[kind].id)}">〰</button>` : ''}</span></div>
       ${render(a[kind])}</div>` : '');
   const stageInfo = st.find((x) => x.stage === S.selStage) || {};
+  const meta = (S.roles || []).find((r) => r.key === S.selStage) || {};
   const html = []
     + (row('voice', '3a base voice (sherpa / placeholder)', (x) => `<audio controls preload="metadata" src="${x.url}"></audio>
         <canvas class="wave" data-wave-src="${x.id}" width="600" height="46"></canvas>
@@ -1138,12 +1139,14 @@ function voiceForm() {
     </div>
     <label class="f"><span>notes (optional)</span><input type="text" id="vf-notes"></label>
     <div class="grid three">
-      <label class="f"><span>RVC .pth weights *</span><input type="file" id="vf-pth" accept=".pth,.onnx"></label>
+      <label class="f"><span>RVC .pth weights (if already trained)</span><input type="file" id="vf-pth" accept=".pth,.onnx"></label>
       <label class="f"><span>.index (optional)</span><input type="file" id="vf-index" accept=".index"></label>
-      <label class="f"><span>10–15 min training sample</span><input type="file" id="vf-sample" accept="audio/*,.zip"></label>
+      <label class="f"><span>10–15 min training sample (audio or video)</span><input type="file" id="vf-sample" accept="audio/*,video/*,.zip"></label>
     </div>
-    <div class="hint">If you already trained the model in RVC WebUI you only need the <code>.pth</code> here —
-      or just press “import from RVC folder” and skip uploading entirely.</div>
+    <div class="hint">Already trained the model in RVC WebUI? You only need the <code>.pth</code> here —
+      or press "import from RVC folder" and skip uploading entirely.
+      Otherwise just upload your raw recording as the training sample (a video works fine — only its
+      audio track is used) and press "Save profile", then use the Train button to kick off RVC training.</div>
     <div class="spread" style="margin-top:12px"><span></span><button class="btn primary" id="vf-save">Save profile</button></div>
     <div id="vf-out"></div></div>`);
   modal('Add a voice profile', box);

@@ -305,6 +305,7 @@ mark { background: rgba(229,181,103,.28); color: #ffe9c2; border-radius: 3px; pa
 
 /* ------------------------------------------------------------------ modal */
 #modal { position: fixed; inset: 0; background: rgba(4,7,11,.72); display: grid; place-items: center; z-index: 50; padding: 20px; }
+#modal[hidden] { display: none; }
 .modal-box { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; width: min(880px, 100%); max-height: 88vh; overflow: auto; }
 .modal-box h3 { margin: 0 0 12px; font-size: 16px; }
 .close-x { float: right; background: none; border: 0; color: var(--fg-mut); font-size: 20px; cursor: pointer; line-height: 1; }

@@ -133,15 +133,26 @@ def main():
     noise_scale_w = torch.tensor([1], dtype=torch.float32)
 
     filename = "model.onnx"
-    torch.onnx.export(
-        model,
-        (x, x_length, noise_scale, length_scale, noise_scale_w),
-        filename,
+    # dynamo=False: torch >=2.5 defaults torch.onnx.export() to the new
+    # torch.export-based exporter, which fails on this model's data-dependent
+    # branch in rational_quadratic_spline (`if torch.min(inputs) < left...`)
+    # with GuardOnDataDependentSymNode — a torch.export tracing limitation,
+    # not a real bug in the model. The legacy TorchScript-based exporter
+    # (this file was written against) traces that branch fine.
+    export_kwargs = dict(
         opset_version=13,
         input_names=["x", "x_length", "noise_scale", "length_scale", "noise_scale_w"],
         output_names=["y"],
         dynamic_axes={"x": {0: "N", 1: "L"}, "x_length": {0: "N"}, "y": {0: "N", 2: "L"}},
     )
+    try:
+        torch.onnx.export(model, (x, x_length, noise_scale, length_scale, noise_scale_w),
+                          filename, dynamo=False, **export_kwargs)
+    except TypeError:
+        # torch <2.5 has no `dynamo` kwarg at all — it always used the legacy
+        # exporter, so just call it the old way.
+        torch.onnx.export(model, (x, x_length, noise_scale, length_scale, noise_scale_w),
+                          filename, **export_kwargs)
     meta_data = {
         "model_type": "vits",
         "comment": "mms",
@@ -364,7 +375,7 @@ def main() -> int:
             die(f"exporter produced {produced or 'nothing'} in {work}")
 
         os.makedirs(out_dir, exist_ok=True)
-        for name in produced + ("vocab.txt", "config.json"):
+        for name in produced + ["vocab.txt", "config.json"]:
             src = os.path.join(work, name)
             if os.path.exists(src):
                 shutil.copy2(src, os.path.join(out_dir, name))

@@ -48,7 +48,13 @@ def get_state(request: Request = None):
 async def api_status(deep: bool = Query(False)):
     st = get_state()
     cfg = st.config()
-    plan = st.plan(refresh=True)
+    # StudioState.plan() has a 25s TTL cache specifically so this endpoint
+    # (polled by the UI every ~15s) doesn't re-probe Ollama/ComfyUI/RVC on
+    # every tick. Hardcoding refresh=True bypassed that cache entirely,
+    # forcing a full synchronous probe cycle on every poll — measured 8-20s
+    # per call once Ollama had a generation in flight, stalling the UI boot.
+    # Only `?deep=true` (an explicit, infrequent request) should force it.
+    plan = st.plan(refresh=deep)
     caps = await asyncio.to_thread(cfg_mod.capabilities, cfg) if deep else {}
     return {"studio": "khmer-ai-content-studio", "version": __version__,
             "data_dir": st.data_root, "db": st.db.stats(),
@@ -800,9 +806,10 @@ async def api_voice_create(name: str = Form(...), pth: UploadFile = File(None),
         except Exception as e:
             warnings.append(f"sample could not be normalised: {str(e)[:120]}")
             sample_path = raw
-    if not pth_path:
+    if not pth_path and not sample_path:
         shutil.rmtree(root, ignore_errors=True)
-        raise HTTPException(400, "a voice profile needs at least the RVC .pth weights")
+        raise HTTPException(400, "a voice profile needs either already-trained RVC .pth weights "
+                                 "or a training sample to train one from")
     prof = st.db.create_voice_profile(name=name.strip() or "My Voice", pth_path=pth_path,
                                       index_path=index_path, sample_path=sample_path,
                                       sample_seconds=seconds, notes=notes, pitch=pitch)

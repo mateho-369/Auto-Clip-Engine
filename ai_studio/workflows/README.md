@@ -37,8 +37,13 @@ value (so `"length": "{{FRAMES}}"` becomes the integer `49`, not `"49"`).
 ## Wan model files expected by these templates
 
 * `wan2.1_t2v_1.3b_480p.json` — `models/diffusion_models/wan2.1_t2v_1.3B_fp16.safetensors`,
-  `models/text_encoders/umt5_xxl_fp16.safetensors`, `models/vae/wan2.1_vae.safetensors`.
-  This is the reliable choice on 8GB VRAM (≈480p, 17–81 frames).
+  `models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors`, `models/vae/wan_2.1_vae.safetensors`.
+  This is the reliable choice on 8GB VRAM (≈480p, 17–81 frames). Uses the fp8-quantized
+  text encoder (6.7GB vs. 11.4GB fp16) — the fp16 encoder alone exceeds the whole 8GB
+  budget this profile targets. (Corrected from an earlier version of this file, which
+  pointed at the fp16 encoder and had the VAE filename wrong — `wan2.1_vae.safetensors`
+  vs. the actually-published `wan_2.1_vae.safetensors`; verified against the live
+  Comfy-Org/Wan_2.1_ComfyUI_repackaged file listing.)
 * `wan2.2_ti2v_5b_480p.json` — `wan2.2_ti2v_5B_fp16.safetensors` loaded as
   `fp8_e4m3fn_scaled`, `umt5_xxl_fp8_e4m3fn_scaled.safetensors`, `wan2.2_vae.safetensors`.
   Only switch to this if `Settings → Video` reports enough free VRAM; start ComfyUI with

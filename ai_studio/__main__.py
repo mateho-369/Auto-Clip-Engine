@@ -10,6 +10,14 @@ import argparse
 import os
 import sys
 
+# Windows consoles default to cp1252, which can't encode the arrow/dot
+# glyphs this CLI prints (readiness report, stage log) — crashes with
+# UnicodeEncodeError before the report ever gets to the useful part.
+# Same root cause as the ai_creator/ fix; applying it here too.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="ai_studio", description="Khmer AI Content Studio")
