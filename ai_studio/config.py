@@ -89,11 +89,15 @@ DEFAULTS = {
                        "f0_method": "{f0_method}", "clean_audio": "False",
                        "export_format": "WAV", "train_id": "0"},
         "api_result_mode": "auto",                   # auto | audio | json
-        "webui_dir": "",                            # RVC-WebUI install dir (for infer_cli.py)
-        "cli_template": ["{python}", "infer_cli.py", "-n", "{threads}", "-d", "{device}",
-                         "-i", "{input}", "-o", "{outdir}", "-m", "{pth}", "-f0", "{f0_method}",
-                         "-r", "{pitch}", "-rm", "{rms_mix_rate}", "-e", "{index_rate}",
-                         "-fp16", "{fp16}", "-c"],
+        "webui_dir": "",                            # RVC-WebUI install dir
+        # matches the RVC-Project mainline's offline CLI (infer/cli.py) — what
+        # README-STUDIO.md actually has users install. {python} resolves to
+        # that install's own venv interpreter, not this process's.
+        "cli_template": ["{python}", "-m", "infer.cli", "--model", "{pth}",
+                         "--input", "{input}", "--output", "{output}",
+                         "--pitch", "{pitch}", "--f0-method", "{f0_method}",
+                         "--index", "{index}", "--index-rate", "{index_rate}",
+                         "--overwrite"],
         "models_dir": "models/rvc",                 # scanned for *.pth + assets/*.index
         "profile_id": "",                           # chosen voice profile (multi-profile support)
         "pitch": 0,
@@ -126,6 +130,11 @@ DEFAULTS = {
         "frames_per_sec_budget": 16,
         "motion_strength": 0.75,
         "negative_prompt": style_mod.DEFAULT_NEGATIVE,
+        "style_tail": "calm documentary look, soft natural light, gentle slow camera drift, "
+                      "muted warm palette, peaceful natural scenery, film-like, no text, no captions",
+        # ^ appended to every scene's visual prompt after the Controller's own
+        # text — override per-project for a different visual style (e.g. a
+        # stick-figure/line-art look instead of the nature-documentary default).
         "seed": -1,
         "timeout_sec": 2400,
         "upload_start_frame": True,                 # TI2V: send a reference image when available
@@ -520,14 +529,22 @@ def data_root(cfg=None):
     return os.path.abspath(d) if os.path.isabs(d) else os.path.join(ROOT, d)
 
 
+def _has_rvc_cli(d):
+    # "infer_cli.py" at root is an older fork's layout; the RVC-Project
+    # mainline (what README-STUDIO.md actually has users install) ships its
+    # offline CLI at infer/cli.py instead — accept either.
+    return os.path.exists(os.path.join(d, "infer_cli.py")) or \
+        os.path.exists(os.path.join(d, "infer", "cli.py"))
+
+
 def _rvc_webui_dir(cfg):
     d = (cfg.get("rvc") or {}).get("webui_dir") or os.environ.get("RVC_WEBUI_DIR") or ""
     d = os.path.expanduser(d)
-    if d and os.path.exists(os.path.join(d, "infer_cli.py")):
+    if d and _has_rvc_cli(d):
         return d
     for guess in (os.path.join(ROOT, "RVC-WebUI"), os.path.expanduser("~/RVC-WebUI"),
                   os.path.expanduser("~/Retrieval-based-Voice-Conversion-WebUI")):
-        if os.path.exists(os.path.join(guess, "infer_cli.py")):
+        if _has_rvc_cli(guess):
             return guess
     return None
 

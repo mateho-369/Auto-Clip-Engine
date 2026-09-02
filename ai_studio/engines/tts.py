@@ -100,12 +100,12 @@ _engine_cache = {}
 
 def _sherpa_tts(cfg, model_onnx, tokens, model_dir):
     """Build (and memoise) the OfflineTts instance — loading it costs ~1s."""
-    key = (model_onnx, tokens, float(cfg.get("tts", {}).get("sample_rate") or 0))
+    tcfg = cfg.get("tts", {})
+    key = (model_onnx, tokens, float(tcfg.get("sample_rate") or 0),
+           float(tcfg.get("noise_scale", 0.5)), float(tcfg.get("noise_scale_w", 0.55)))
     if key in _engine_cache:
         return _engine_cache[key]
     import sherpa_onnx
-
-    tcfg = cfg.get("tts", {})
     vits_kwargs = dict(model=model_onnx, tokens=tokens)
     lex = os.path.join(model_dir, "lexicon.txt")
     if os.path.exists(lex):
@@ -113,13 +113,19 @@ def _sherpa_tts(cfg, model_onnx, tokens, model_dir):
     espeak = os.path.join(model_dir, "espeak-ng-data")
     if os.path.isdir(espeak):
         vits_kwargs["data_dir"] = espeak
-    vits_kwargs["noise_scale"] = 0.667
+    # noise_scale: audio variability — lower reads as calmer/steadier, higher
+    # as more expressive/erratic. noise_scale_w: *duration* variability —
+    # this is what made narration sound "sometimes fast, sometimes lag":
+    # VITS's default (0.8) randomizes per-phoneme timing fairly aggressively.
+    # Both configurable per-project; defaults tuned for calm, even narration
+    # rather than sherpa-onnx's out-of-the-box expressive-speech defaults.
+    vits_kwargs["noise_scale"] = float(tcfg.get("noise_scale", 0.5))
     # The installed sherpa-onnx (1.13.7)'s OfflineTtsVitsModelConfig ctor
     # takes `noise_scale_w`, not `noise_scale_dur` — the old kwarg name made
     # every real-model call raise "incompatible constructor arguments" and
     # silently fall back to the placeholder voice (confirmed: this was the
     # actual reason real TTS never fired once the model was installed).
-    vits_kwargs["noise_scale_w"] = 0.8
+    vits_kwargs["noise_scale_w"] = float(tcfg.get("noise_scale_w", 0.55))
     num_threads = int(os.cpu_count() or 4)
     num_threads = max(1, min(4, num_threads // 2))       # leave RAM/cores for ffmpeg
     kwargs_list = [

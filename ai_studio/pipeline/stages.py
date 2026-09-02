@@ -503,8 +503,9 @@ async def stage_assemble(ctx, _idx):
                       ("with_captions", "final_captions")):
         p = res.get(key)
         if p and os.path.exists(p):
+            asset_dur = res.get("duration", 0) if kind == "final_captions" else 0
             assets.append({"kind": kind, "path": p, "scene_idx": -1,
-                           "duration": 0, "meta": {"of": os.path.basename(final_path)}})
+                           "duration": asset_dur, "meta": {"of": os.path.basename(final_path)}})
     dur = float(res.get("duration") or 0)
     want = float(ctx.project.get("target_duration") or 0)
     note = f"{dur:.1f}s · {res.get('width')}x{res.get('height')}@{res.get('fps')}"

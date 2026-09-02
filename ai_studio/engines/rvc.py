@@ -96,10 +96,11 @@ def convert(in_wav, out_wav, cfg, profile=None, progress=None):
             "attempts": attempts}
 
 
-def _fields(cfg, profile, in_wav):
+def _fields(cfg, profile, in_wav, out_wav):
     r = cfg.get("rvc", {})
     prof = profile or {}
     model_name = os.path.splitext(os.path.basename(prof.get("pth_path") or ""))[0]
+    webui_dir = r.get("webui_dir") or ""
     subs = {
         "model_name": model_name, "pth": prof.get("pth_path") or "",
         "index": prof.get("index_path") or "",
@@ -110,7 +111,7 @@ def _fields(cfg, profile, in_wav):
         "input": in_wav, "device": r.get("device") or ("cpu" if r.get("device") == "" else "cuda:0"),
         "threads": int(r.get("threads") or 4), "fp16": "True" if r.get("fp16") else "False",
         "clean": "True" if r.get("clean") else "False",
-        "python": _python_exe(), "webui_dir": r.get("webui_dir") or "",
+        "python": _python_exe(webui_dir), "webui_dir": webui_dir,
         "outdir": os.path.dirname(out_wav) or ".", "output": out_wav,
         "crepe_hop": int(r.get("crepe_hop_length") or 128),
         "sample_rate": str(40000),
@@ -127,7 +128,7 @@ def _http_convert(in_wav, out_wav, cfg, profile, progress, attempts):
     if not (profile or {}).get("pth_path"):
         attempts.append("http: no voice profile selected")
         return {"ok": False}
-    subs = _fields(cfg, profile, in_wav)
+    subs = _fields(cfg, profile, in_wav, out_wav)
     boundary = "----aiStudio" + uuid.uuid4().hex
     parts = []
     fn = os.path.basename(in_wav)
@@ -229,7 +230,7 @@ def _cli_convert(in_wav, out_wav, cfg, profile, progress, attempts):
         attempts.append("cli: no voice profile selected")
         return {"ok": False}
     outdir = ensure_dir(os.path.join(os.path.dirname(out_wav) or ".", ".rvc_out"))
-    subs = _fields(cfg, profile, in_wav)
+    subs = _fields(cfg, profile, in_wav, out_wav)
     subs["outdir"] = outdir
     argv = []
     for tok in (r.get("cli_template") or []):
@@ -281,10 +282,11 @@ def _bypass(in_wav, out_wav, cfg, profile, attempts):
     semis = float(r.get("pitch") or 0)
     formant = float(r.get("formant_shift") or 0)
     ensure_dir(os.path.dirname(out_wav) or ".")
+    reason = ("; ".join(attempts) if attempts else
+              "no RVC back-end available — using the MMS Khmer voice directly")
     if abs(semis) < 0.05 and abs(formant) < 0.01:
         shutil.copyfile(in_wav, out_wav)
-        return {"ok": True, "engine": "bypass", "converted": False,
-                "reason": "no RVC back-end available — using the MMS Khmer voice directly",
+        return {"ok": True, "engine": "bypass", "converted": False, "reason": reason,
                 "duration": media_duration(out_wav, 0)}
     factor = 2 ** (semis / 12.0)
     ff = ffmpeg_exe()
@@ -314,7 +316,15 @@ def _bypass(in_wav, out_wav, cfg, profile, attempts):
                 "reason": "copied after filter error", "duration": media_duration(out_wav, 0)}
 
 
-def _python_exe():
+def _python_exe(webui_dir=""):
+    """The RVC-WebUI venv's own interpreter, not this process's (they're separate
+    envs — sys.executable here is ai_studio's venv, which doesn't have RVC's deps)."""
+    if webui_dir:
+        for cand in ("./.venv/Scripts/python.exe", "./.venv/bin/python",
+                     "./venv/Scripts/python.exe", "./venv/bin/python"):
+            p = os.path.join(webui_dir, cand)
+            if os.path.isfile(p):
+                return os.path.abspath(p)
     import sys
     return sys.executable or "python"
 
@@ -337,26 +347,56 @@ def prepare_sample(src_path, dst_dir, target_sr=40000, want_sec=(120, 1200)):
             "sample_rate": target_sr}
 
 
+def _default_train_command(webui_dir):
+    """The RVC-Project mainline (what README-STUDIO.md installs) has no
+    single-command CLI for training — its own train/*.py scripts even break
+    when run directly (see scripts/rvc_autotrain.py's docstring). Default to
+    that wrapper instead of guessing at a fork-specific `infer-web.py` flag
+    set that doesn't exist in what's actually installed."""
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    wrapper = os.path.join(here, "scripts", "rvc_autotrain.py")
+    return (f'"{{python}}" "{wrapper}" --rvc-dir "{webui_dir or "{webui_dir}"}" '
+            f'--exp "{{name}}" --dataset "{{sample}}"')
+
+
+def _train_subs(profile, sample_path, cfg):
+    r = cfg.get("rvc", {})
+    webui_dir = r.get("webui_dir") or ""
+    return {"sample": sample_path, "sample_dir": os.path.dirname(sample_path),
+            "name": (profile or {}).get("name") or "my_voice",
+            "exp": (profile or {}).get("name") or "my_voice",
+            "python": _python_exe(webui_dir), "webui_dir": webui_dir}
+
+
 def training_command(profile, sample_path, cfg):
     """The exact command we'd run — shown to the Director, copy-pasteable."""
     r = cfg.get("rvc", {})
-    if r.get("train_command"):
-        return r["train_command"].format(sample=sample_path, name=(profile or {}).get("name", "my_voice"))
-    webui = r.get("webui_dir") or "RVC-WebUI"
-    return (f'cd "{webui}" && python infer-web.py --exp_name "{(profile or {}).get("name") or "my_voice"}" '
-            f'--dataset_dir "{os.path.dirname(sample_path)}" --batch_size 8 --total_epoch 200 '
-            f'--save_every_epoch 50 --pretrained_v2')
+    subs = _train_subs(profile, sample_path, cfg)
+    cmd = r.get("train_command") or _default_train_command(subs["webui_dir"])
+    cmd = " ".join(str(t) for t in cmd) if isinstance(cmd, list) else cmd
+    try:
+        return cmd.format(**subs)
+    except Exception:
+        return cmd
 
 
 def run_training(profile, sample_path, cfg, log_line=None, timeout=21600):
-    """Optional: launch a user-configured training command and stream its log."""
+    """Launch the (configured, or default wrapper-script) training command,
+    with {sample}/{name}/{python}/{webui_dir}/... substituted in — same
+    placeholder set Settings' own field hint advertises."""
     r = cfg.get("rvc", {})
-    cmd = r.get("train_command")
-    if not cmd:
-        return {"ok": False, "reason": "no rvc.train_command configured — training from the "
-                                       "studio is opt-in; the prepared sample + suggested "
-                                       "command are ready for RVC WebUI"}
-    argv = cmd if isinstance(cmd, list) else [cmd]
+    subs = _train_subs(profile, sample_path, cfg)
+    if not subs["webui_dir"]:
+        return {"ok": False, "reason": "set rvc.webui_dir in Settings first — "
+                                       "training needs to know where RVC-WebUI is installed"}
+    cmd = r.get("train_command") or _default_train_command(subs["webui_dir"])
+    if isinstance(cmd, list):
+        argv = [str(t).format(**subs) if isinstance(t, str) and "{" in t else t for t in cmd]
+    else:
+        try:
+            argv = cmd.format(**subs)
+        except Exception:
+            argv = cmd
     try:
         proc = subprocess.Popen(argv, shell=True, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, bufsize=1)

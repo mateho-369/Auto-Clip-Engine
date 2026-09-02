@@ -36,7 +36,8 @@ def compose_prompt(scene, cfg):
     parts = [vp]
     if mood and mood.lower() not in vp.lower():
         parts.append(f"{mood} atmosphere")
-    parts.append(STYLE_TAIL)
+    style_tail = (cfg.get("video", {}) or {}).get("style_tail")
+    parts.append(style_tail if style_tail is not None else STYLE_TAIL)
     return ", ".join(p for p in parts if p)[:900]
 
 

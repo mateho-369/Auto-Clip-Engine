@@ -452,7 +452,12 @@ async function refreshProject() {
   const d = await api(`/projects/${S.projectId}`);
   S.project = d.project; S.scenes = d.scenes || []; S.runs = d.runs || [];
   S.integrity = d.integrity; S.disk = d.disk; S.prompts = d.prompts || []; S.assets = d.assets || [];
-  S.runId = S.runId && S.runs.some((r) => r.id === S.runId) ? S.runId : (d.latest_run_id || null);
+  // A run started elsewhere (another tab, a script, GPU catch-up) should pull
+  // the viewer to it automatically — otherwise the UI silently keeps showing
+  // whatever older run happened to be selected while new work runs unseen.
+  const liveRun = (S.runs || []).find((r) => r.status === 'running');
+  S.runId = liveRun ? liveRun.id
+    : (S.runId && S.runs.some((r) => r.id === S.runId) ? S.runId : (d.latest_run_id || null));
   if (S.runId) await refreshRun().catch(() => {});
 }
 
@@ -608,11 +613,14 @@ function downloadsCard() {
         <span class="right"><a class="btn tiny" href="/api/assets/${esc(x.id)}/download" title="download">⬇</a></span></div>`).join('');
     return `<details ${k === 'final' ? 'open' : ''}><summary class="tiny">${esc(k)} <span class="mut">(${by[k].length})</span></summary>${rows}</details>`;
   }).join('');
-  const final = by.final ? by.final[0] : null;
+  const plain = by.final ? by.final[0] : null;
+  const captioned = by.final_captions ? by.final_captions[0] : null;
+  const final = captioned || plain;
   return `<div class="card">
     <div class="spread"><h3 style="margin:0">Files & downloads</h3>
       <div class="btn-group">
-        ${final ? `<a class="btn primary small" href="/api/assets/${esc(final.id)}/download" download>⬇ final .mp4</a>` : ''}
+        ${captioned ? `<a class="btn primary small" href="/api/assets/${esc(captioned.id)}/download" download>⬇ final .mp4 (with captions)</a>` : ''}
+        ${plain ? `<a class="btn ${captioned ? '' : 'primary'} small" href="/api/assets/${esc(plain.id)}/download" download>⬇ final .mp4${captioned ? ' (no captions)' : ''}</a>` : ''}
         <a class="btn small" href="/api/projects/${esc(S.projectId)}/download?kind=all" title="every intermediate + final, zipped">⬇ project zip</a>
         <a class="btn small" href="/api/projects/${esc(S.projectId)}/download?kind=bundle" title="script + scenes + prompts as JSON">⬇ .json</a>
       </div></div>
@@ -730,7 +738,7 @@ function qaHTML(meta) {
 
 async function drawWave(canvas, assetId) {
   try {
-    const d = await api(`/assets/${assetId}/waveform?bins=${Math.max(60, Math.floor(canvas.clientWidth || 600) / 4)}`);
+    const d = await api(`/assets/${assetId}/waveform?bins=${Math.max(60, Math.floor((canvas.clientWidth || 600) / 4))}`);
     const ctx = canvas.getContext('2d');
     const w = canvas.width = canvas.clientWidth * (window.devicePixelRatio || 1);
     const h = canvas.height = 46 * (window.devicePixelRatio || 1);

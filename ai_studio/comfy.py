@@ -182,6 +182,7 @@ class ComfyUIClient:
         """
         deadline = time.time() + timeout
         state = {"pct": 0.0, "node": "", "step": 0, "max": 0}
+        last_reported = [None]
         stop = threading.Event()
         ws_thread = None
         try:
@@ -205,12 +206,12 @@ class ComfyUIClient:
                         errs = status.get("messages") or []
                         txt = "; ".join(str(e) for e in errs)[:600] or "node execution error"
                         raise ComfyError(f"ComfyUI job failed: {txt}")
-                    self._report(on_progress, state)
+                    self._report(on_progress, state, last_reported)
                     return outputs
                 pos = self.queue_position(prompt_id)
                 if pos is not None and pos > 0:
                     state["node"] = f"queued · position {pos}"
-                self._report(on_progress, state)
+                self._report(on_progress, state, last_reported)
                 time.sleep(poll)
             self.interrupt(prompt_id)
             raise ComfyError(f"ComfyUI job timed out after {int(timeout)}s")
@@ -222,11 +223,19 @@ class ComfyUIClient:
                 self.free_memory()
 
     @staticmethod
-    def _report(on_progress, state):
+    def _report(on_progress, state, last_reported=None):
         if on_progress is None:
             return
+        pct = min(99.5, max(1.0, state["pct"]))
+        node = state.get("node") or ""
+        if last_reported is not None:
+            key = (round(pct, 1), node)
+            if last_reported[0] == key:
+                return  # unchanged since the last tick — e.g. still queued at
+                        # the same position — don't spam the run's live log
+            last_reported[0] = key
         try:
-            on_progress(min(99.5, max(1.0, state["pct"])), state.get("node") or "")
+            on_progress(pct, node)
         except Exception:
             pass
 

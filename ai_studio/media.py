@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import threading
+import unicodedata
 
 from .util import (ensure_dir, ffmpeg_exe, media_duration, read_wav, rel, run_ffmpeg,
                    wav_duration, write_wav)
@@ -359,21 +360,102 @@ def thumbnail(video, dst_png, at_sec=0.6, width=320):
         return None
 
 
-def burn_subtitles(video, srt, dst, force_style="FontName=Noto Sans Khmer,FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H60000000,BorderStyle=1,Outline=2,Shadow=1,MarginV=48"):
-    """Only used when assembly.burn_captions is on and libass is available."""
+def burn_subtitles(video, srt, dst, force_style="FontName=Khmer OS Battambang,FontSize=15,PrimaryColour=&H00FFFFFF,OutlineColour=&HC0000000,BorderStyle=1,Outline=2,Shadow=0,MarginV=56,MarginL=28,MarginR=28,Alignment=2"):
+    """Only used when assembly.burn_captions is on and libass is available.
+
+    Font choice matters here, not just cosmetically: this Windows ffmpeg
+    build's libass won't discover installed system fonts on its own (no
+    `fontsdir` = it silently falls back to *something*, and with "Noto Sans
+    Khmer" specifically that fallback doesn't shape Khmer script correctly —
+    dependent vowels and coeng-stacked consonants render unshaped, reading as
+    scrambled text even though the underlying SRT is correct). Pointing
+    fontsdir at the Windows font directory and picking a font confirmed (by
+    rendering a test frame) to shape correctly fixes it.
+    """
     if not _has_filter("subtitles"):
         raise RuntimeError("this ffmpeg build has no 'subtitles' filter (needs libass) — "
                            "keep SRT as a sidecar file instead")
     srt_esc = str(srt).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
-    run_ffmpeg(["-i", video, "-vf", f"subtitles='{srt_esc}':force_style='{force_style}'",
+    vf = f"subtitles='{srt_esc}'"
+    fontsdir = os.environ.get("SystemRoot", r"C:\Windows") + r"\Fonts" if os.name == "nt" else ""
+    if fontsdir and os.path.isdir(fontsdir):
+        vf += f":fontsdir='{fontsdir.replace(chr(92), '/').replace(':', chr(92) + ':')}'"
+    vf += f":force_style='{force_style}'"
+    run_ffmpeg(["-i", video, "-vf", vf,
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-c:a", "copy", dst],
                timeout=3600)
     return dst
 
 
+_KHMER_BREAK_CHARS = "។៕៖,.!? "
+
+
+def _safe_khmer_cut(text, cut):
+    """Never let a line break land inside a Khmer grapheme cluster.
+
+    Khmer dependent vowels/diacritics are combining marks (Unicode category
+    Mn/Mc) that must stay glued to the base consonant before them, and the
+    coeng sign (U+17D2) glues to the consonant *after* it to form a stacked
+    subscript — breaking between either pair renders as visibly broken
+    script (a bare "ភ" on one line, the subscript "្លែត" orphaned on the
+    next). Back the cut up until neither case applies.
+    """
+    while cut > 0 and (
+        (cut < len(text) and unicodedata.category(text[cut])[0] == "M")
+        or text[cut - 1] == "្"
+    ):
+        cut -= 1
+    return max(cut, 1)
+
+
+def _wrap_khmer(text, max_chars=16):
+    """Insert manual line breaks for burned captions.
+
+    Khmer script has no spaces between words, so libass's whitespace-based
+    auto-wrap has nowhere to break a long line — it silently overflows the
+    frame instead (this was cutting text off at the left/right edges on a
+    480px-wide portrait video). Break by hand instead, preferring a natural
+    punctuation boundary near the target width, falling back to a hard
+    character-count cut only when there is no punctuation to break on — and
+    always snapped to a grapheme-cluster-safe position either way.
+    """
+    text = text.strip()
+    lines = []
+    while len(text) > max_chars:
+        cut = -1
+        for i in range(min(max_chars, len(text) - 1), max(0, max_chars - 8), -1):
+            if text[i] in _KHMER_BREAK_CHARS:
+                cut = i + 1
+                break
+        if cut < 0:
+            cut = max_chars
+        cut = _safe_khmer_cut(text, cut)
+        lines.append(text[:cut].strip())
+        text = text[cut:].strip()
+    if text:
+        lines.append(text)
+    return "\n".join(lines) if lines else text
+
+
+def _split_sentences(text):
+    """Break a scene's (possibly multi-sentence) text at Khmer/Latin sentence
+    boundaries so one caption block is one thought, not a whole paragraph."""
+    parts, cur = [], ""
+    for ch in text:
+        cur += ch
+        if ch in "។!?." and cur.strip():
+            parts.append(cur.strip())
+            cur = ""
+    if cur.strip():
+        parts.append(cur.strip())
+    return parts or [text]
+
+
 def write_srt(scene_texts, scene_starts, dst, words_per_line=6):
-    """Khmer-safe SRT: whole sentence per scene (word timing on Khmer is unreliable
-    because it has no spaces, so we keep subtitle granularity = scene)."""
+    """Khmer-safe SRT: one sentence per caption block, time-sliced within the
+    scene's window (word timing on Khmer is unreliable — it has no spaces —
+    so sentence, not word, is the smallest unit we sync to), each block
+    manually line-wrapped since libass can't auto-wrap spaceless script."""
     def fmt(sec):
         sec = max(0.0, float(sec))
         h = int(sec // 3600)
@@ -381,13 +463,20 @@ def write_srt(scene_texts, scene_starts, dst, words_per_line=6):
         s = sec % 60
         return f"{h:02d}:{m:02d}:{int(s):02d},{int(round((s % 1) * 1000)):03d}"
 
-    lines = []
+    blocks = []
+    n = 0
     for i, (txt, start) in enumerate(zip(scene_texts, scene_starts)):
         end = scene_starts[i + 1] if i + 1 < len(scene_starts) else start + 3.0
-        lines.append(f"{i + 1}\n{fmt(start)} --> {fmt(max(end, start + 0.8))}\n{txt}\n")
+        end = max(end, start + 0.8)
+        sentences = _split_sentences(txt)
+        span = (end - start) / len(sentences)
+        for j, sent in enumerate(sentences):
+            s0, s1 = start + j * span, start + (j + 1) * span
+            n += 1
+            blocks.append(f"{n}\n{fmt(s0)} --> {fmt(s1)}\n{_wrap_khmer(sent)}\n")
     ensure_dir(os.path.dirname(dst) or ".")
     with open(dst, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+        f.write("\n".join(blocks))
     return dst
 
 
