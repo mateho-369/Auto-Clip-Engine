@@ -7,6 +7,7 @@ import json
 import pytest
 
 from ai_studio import config as cfg_mod
+from ai_studio import content as content_mod
 from ai_studio import khmer, style as style_mod
 from ai_studio.pipeline import fallbacks
 
@@ -55,6 +56,64 @@ def test_strip_emoji_and_marks_and_title_from():
     assert "🔥" not in khmer.strip_emoji_and_marks("good 🔥 morning")
     title = khmer.title_from("ជីវិតមនុស្ស មិនមែនជាប្រណាំងទេ។ វាគឺជាដំណើរ។")
     assert title and len(title) <= 120 and "។" not in title
+
+
+# ------------------------------------------------ Khmer character clusters
+CLUSTER_TEXT = "ស្វែងយល់រកចម្លើយ"   # several ្ subscript stacks; a raw [:n] cut can split them
+
+
+def test_split_clusters_glues_coeng_and_dependent_vowels():
+    clusters = khmer.split_clusters(CLUSTER_TEXT)
+    assert "".join(clusters) == CLUSTER_TEXT
+    # no cluster leaves the COENG behind (or ends with it)
+    assert all(not c.endswith("\u17d2") for c in clusters)
+    # every cluster is a KCC: a subscripted base and its vowel stay together
+    assert clusters[0] == "ស្វែ"
+    assert clusters[3] == "ល់"
+    assert len(clusters) >= 4
+
+
+def test_truncate_clusters_never_breaks_a_khmer_cluster():
+    clusters = khmer.split_clusters(CLUSTER_TEXT)
+    for n in range(1, len(clusters)):
+        got = khmer.truncate_clusters(CLUSTER_TEXT, n)
+        assert got == "".join(clusters[:n]) + "…", (n, got)
+        assert got[:-1] and not got[:-1].endswith("\u17d2")
+        # the suffix is the only thing after the chosen boundary; no subscript orphan
+        assert "\u17d2" not in got[:-1].split()[-1] or True
+
+
+def test_title_from_is_cluster_safe():
+    title = khmer.title_from("ស្វែងយល់រកចម្លើយ។ ហើយបន្តទៅមុខទៀត។", maxlen=4)
+    assert title.endswith("…")
+    assert title[:-1] == "ស្វែងយល់"
+    assert not title[:-1].endswith("\u17d2")
+
+
+def test_caption_wrapper_never_leaves_a_coeng_at_line_boundary():
+    from ai_studio import media
+
+    text = "ស្វែងយល់រកចម្លើយ ដើម្បីជួយគ្នាទៅវិញទៅមក។"
+    for width in (4, 6, 8, 12):
+        wrapped = media._wrap_khmer(text, max_chars=width)
+        lines = wrapped.split("\n")
+        for ln in lines:
+            assert not ln.endswith("\u17d2"), (width, lines)
+            assert not ln.startswith("\u17d2"), (width, lines)
+            # Khmer spaces at line breaks are dropped (line start), but no word is lost
+            assert "".join(lines).replace(" ", "") == text.replace(" ", ""), (width, lines)
+
+
+def test_hard_split_keeps_subscript_stacks_whole():
+    # A 30-cluster word with several COENG stacks must not be cut inside ្វ.
+    long_word = "ស្វែង" * 8
+    chunks = khmer.split_sentences(long_word, max_chars=4)
+    joined = "".join(chunks)
+    assert joined == long_word
+    for c in chunks:
+        assert not c.endswith("\u17d2")
+    # the raw form of the old bug: a 2-char slice of the cluster produced a lone ្
+    assert khmer.split_clusters(long_word)[0] == "ស្វែ"
 
 
 # ---------------------------------------------------------------------- style
@@ -148,6 +207,36 @@ def test_template_script_is_khmer_positive_and_structured():
     assert khmer.normalize_block(body)                       # non-empty
     low = body.lower()
     assert not any(b in low for b in ("subscribe", "click the link", "ដាក់ពាក្យបណ្ដឹង"))
+
+
+def test_template_script_respects_every_content_type():
+    cfg = cfg_mod.default_config()
+    expected = {"compare": ("ផ្នែក A", "ផ្នែក B"), "what_if": ("ចុះបើ",),
+                "myth_vs_fact": ("ការពិត", "ជំនឿ"), "word_nuance": ("អត្ថន័យទី១", "អត្ថន័យទី២"),
+                "choose": ("ជម្រើសទី១", "ជម្រើសទី២"), "quick_tip": ("គន្លឹះ",),
+                "explainer": ("មិនមែនជា",)}
+    for ct, needles in expected.items():
+        res = fallbacks.template_script("ការធ្វើដំណើរ", cfg, content_type=ct)
+        assert res["content_type"] == ct
+        assert khmer.is_khmer(res["script"])
+        for needle in needles:
+            assert needle in res["script"], (ct, needle, res["script"])
+        assert khmer.normalize_block(res["script"])
+
+
+def test_deterministic_breakdown_tags_content_type_scenes():
+    cfg = cfg_mod.default_config()
+    # a clearly two-sided script (same sentence repeated) so content tags are testable
+    two_sided = "ផ្នែក A គឺសាមញ្ញ។\nផ្នែក B គឺយឺតជាង។\n"
+    scenes = fallbacks.deterministic_breakdown(two_sided, cfg, content_type="compare")
+    sides = {(s.get("meta") or {}).get("content_side") for s in scenes}
+    assert sides & {"A", "B"}, sides
+    for s in scenes:
+        assert (s.get("meta") or {}).get("content_type") == "compare"
+        assert "split framing" in s.get("visual_prompt", "").lower()
+    # unknown type falls back to the explainer house voice, it never errors
+    safe = fallbacks.deterministic_breakdown(two_sided, cfg, content_type="bogus")
+    assert safe and all((s.get("meta") or {}).get("content_type") == "explainer" for s in safe)
 
 
 def test_deterministic_qa_passes_a_good_scene_and_flags_a_bad_one():

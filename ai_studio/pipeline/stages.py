@@ -72,7 +72,8 @@ async def stage_script(ctx, _idx):
     cfg["target_duration"] = float(project.get("target_duration") or 30)
     res = await generate(llm, project.get("topic_hint") or "", cfg,
                          style_notes=project.get("style_notes") or "",
-                         regenerate_note=project.get("regenerate_note") or "")
+                         regenerate_note=project.get("regenerate_note") or "",
+                         content_type=project.get("content_type") or "explainer")
     script = khmer.normalize_block(res.get("script") or "")
     if not script:
         return {"ok": False, "error": "auto-idea produced no script"}
@@ -88,7 +89,7 @@ async def stage_script(ctx, _idx):
                                 "notes": res.get("notes") or []}}],
            "project_update": {"script": script, "script_locked": False,
                               "script_origin": res.get("origin") or "ai",
-                              "title": (res.get("title") or khmer.title_from(script))[:120],
+                              "title": khmer.truncate_clusters(res.get("title") or khmer.title_from(script), 120),
                               "status": "review" if needs_review else "ready"},
            "notes": res.get("notes") or [], "requires_review": bool(needs_review),
            "generated_logline": res.get("logline", "")}
@@ -115,7 +116,8 @@ async def stage_breakdown(ctx, _idx):
     board = ctx.db.list_scenes(ctx.project_id) or None
     from ..agents.controller import break_down
 
-    scenes, meta = await break_down(ctx.llm(), script, ctx.cfg, plan_scenes=board)
+    scenes, meta = await break_down(ctx.llm(), script, ctx.cfg, plan_scenes=board,
+                                    content_type=project.get("content_type") or "explainer")
     if not scenes:
         return {"ok": False, "error": "segmentation produced no scenes"}
     limit = int(ctx.cfg["pipeline"].get("max_scenes", 12))

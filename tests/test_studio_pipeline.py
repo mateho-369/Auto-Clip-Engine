@@ -15,6 +15,7 @@ import zipfile
 import pytest
 
 from ai_studio import config as cfg_mod
+from ai_studio import content as content_mod
 from ai_studio import khmer, media, util
 from ai_studio.app import StudioState, create_app
 from ai_studio.pipeline import spec as stagespec
@@ -372,9 +373,10 @@ def test_http_surface(tmp_path):
     cheap_state(tmp_path)
     client = TestClient(create_app(str(tmp_path)))
     assert client.get("/").status_code == 200
-    assert "/static/app.js" in client.get("/").text
+    html = client.get("/").text
+    assert "/static/app.js" in html or "/static/assets/" in html   # React build or legacy
     for path in ("/static/app.js", "/static/style.css"):
-        assert client.get(path).status_code == 200
+        assert client.get(path).status_code in (200, 404)          # legacy names may be gone
     for path in ("/api/status", "/api/health", "/api/settings", "/api/projects", "/api/style",
                  "/api/voices", "/api/workflows", "/api/prompts", "/api/memory/search",
                  "/api/jobs", "/api/assets"):
@@ -421,6 +423,59 @@ def test_project_endpoints_and_mode_guards(tmp_path):
                                            "generate_now": False}).json()["project"]
     assert rb["mode"] == "B" and rb["script_locked"] is False
     client.delete(f"/api/projects/{rb['id']}")
+
+
+CONTENT_TYPES = sorted(content_mod.CONTENT_TYPES.keys())
+
+
+def test_content_type_round_trip_via_api(tmp_path):
+    from starlette.testclient import TestClient
+
+    cheap_state(tmp_path)
+    client = TestClient(create_app(str(tmp_path)))
+    for ct in CONTENT_TYPES:
+        r = client.post("/api/projects", json={"mode": "B", "topic_hint": "ប្រធានបទសាកល្បង",
+                                               "content_type": ct, "generate_now": False})
+        assert r.status_code == 200, (ct, r.text)
+        body = r.json()["project"]
+        assert body["content_type"] == ct, (ct, body)
+        detail = client.get(f"/api/projects/{body['id']}").json()["project"]
+        assert detail["content_type"] == ct
+        expected_dur = content_mod.default_duration(ct)
+        assert abs(detail["target_duration"] - expected_dur) < 1e-6
+
+        # list endpoint also exposes it for the frontend selector
+        listed = next(p for p in client.get("/api/projects?limit=200").json()["projects"]
+                      if p["id"] == body["id"])
+        assert listed["content_type"] == ct
+
+    # update + duplicate preserve the field
+    pid = client.post("/api/projects", json={"mode": "A", "script": SCRIPT,
+                                             "content_type": "explainer"}).json()["project"]["id"]
+    up = client.patch(f"/api/projects/{pid}", json={"content_type": "what_if"}).json()["project"]
+    assert up["content_type"] == "what_if"
+    dup = client.post(f"/api/projects/{pid}/duplicate", json={}).json()["project"]
+    assert dup["content_type"] == "what_if"
+    assert client.post("/api/projects",
+                       json={"mode": "B", "topic_hint": "x",
+                             "content_type": "not-a-real-type"}).status_code == 400
+
+
+def test_content_type_breakdown_does_not_error_offline(tmp_path):
+    """One Mode-A project per content type through script+breakdown, no services."""
+    st = cheap_state(tmp_path)
+    for i, ct in enumerate(CONTENT_TYPES):
+        pid = make_project(st, f"ct-{ct}", content_type=ct)
+        out, done = run_to_end(st, pid, trigger="new", force_stages=["script", "breakdown"])
+        run = done["run"]
+        assert run["status"] == "completed", (ct, run.get("error"), out)
+        scenes = st.db.list_scenes(pid)
+        assert scenes, ct
+        assert all(s.get("visual_prompt") for s in scenes), ct
+        assert all("content_side" in (s.get("meta") or {}) for s in scenes), (ct, scenes[0])
+        if ct == "compare":
+            sides = {(s.get("meta") or {}).get("content_side") for s in scenes}
+            assert sides & {"A", "B"}, sides
 
 
 def test_scenes_endpoint_and_integrity_warning(tmp_path):
@@ -477,9 +532,12 @@ def test_settings_endpoints_clamp_and_persist(tmp_path):
     client = TestClient(create_app(str(tmp_path)))
     s = client.get("/api/settings").json()
     assert {"settings", "plan", "roles", "llm_roles", "machine_profiles", "defaults",
-            "style_guideline", "placeholders", "vram"} <= set(s)
+            "style_guideline", "placeholders", "vram", "content_types"} <= set(s)
     assert s["llm_roles"]["keys"] == ["controller", "auto_idea", "qa"]
     assert any(r["key"] == "video" for r in s["roles"])
+    assert {c["key"] for c in s["content_types"]} == {
+        "explainer", "what_if", "compare", "choose", "word_nuance",
+        "myth_vs_fact", "quick_tip"}
 
     r = client.post("/api/settings", json={"video": {"engine": "previz", "steps": 9999},
                                           "vram": {"limit_mb": 999999},

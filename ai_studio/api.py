@@ -23,7 +23,7 @@ from fastapi import (APIRouter, Body, Depends, File, Form, HTTPException, Query,
                      UploadFile, WebSocket, WebSocketDisconnect)
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
-from . import __version__, config as cfg_mod, khmer, media, style as style_mod
+from . import __version__, config as cfg_mod, content as content_mod, khmer, media, style as style_mod
 from . import vram as vram_mod
 from .db import Database
 from .events import RunProgress
@@ -91,22 +91,28 @@ async def api_create_project(payload: dict = Body(...)):
     mode = str(payload.get("mode") or "A").strip().upper()[:1]
     if mode not in ("A", "B"):
         raise HTTPException(400, "mode must be 'A' (Director script) or 'B' (auto idea)")
+    content_type = content_mod.normalize_content_type(payload.get("content_type") or "explainer")
+    if (payload.get("content_type") or "explainer") not in content_mod.CONTENT_TYPES:
+        raise HTTPException(400, f"unknown content_type — pick one of "
+                                 f"{', '.join(content_mod.CONTENT_TYPES)}")
     script = khmer.normalize_block(payload.get("script") or "")
-    topic = khmer.strip_emoji_and_marks(payload.get("topic_hint") or "")[:400]
+    topic = khmer.truncate_clusters(khmer.strip_emoji_and_marks(payload.get("topic_hint") or ""), 400)
     if mode == "A" and not script:
         raise HTTPException(400, "Mode A needs the finished script pasted in — the studio will "
                                  "never write or rewrite it for you.")
     if mode == "A" and len(script) < 12:
         raise HTTPException(400, "That script looks too short to segment — paste the full text.")
-    title = (payload.get("title") or "").strip()[:120] or (
-        khmer.title_from(script) if script else khmer.strip_emoji_and_marks(topic)[:60] or
-        "Auto idea short")
+    title = khmer.truncate_clusters((payload.get("title") or "").strip(), 120) or (
+        khmer.title_from(script) if script else
+        khmer.truncate_clusters(khmer.strip_emoji_and_marks(topic), 60) or "Auto idea short")
     proj = st.db.create_project(
-        title=title, mode=mode, status="draft", language=payload.get("language") or "km",
+        title=title, mode=mode, status="draft", content_type=content_type,
+        language=payload.get("language") or "km",
         script=script if mode == "A" else "", script_locked=(mode == "A"),
         script_origin="director" if mode == "A" else "", topic_hint=topic,
-        style_notes=(payload.get("style_notes") or "")[:800],
-        target_duration=float(payload.get("target_duration") or 30),
+        style_notes=khmer.truncate_clusters(payload.get("style_notes") or "", 800),
+        target_duration=float(payload.get("target_duration")
+                              or content_mod.default_duration(content_type)),
         voice_profile_id=payload.get("voice_profile_id") or "",
         settings=payload.get("settings") or {}, parent_id=payload.get("parent_id") or "")
     st.bus.publish("project_created", {"project_id": proj["id"], "mode": mode,
@@ -189,9 +195,11 @@ async def api_update_project(project_id: str, payload: dict = Body(...)):
     st = get_state()
     if not st.db.get_project(project_id):
         raise HTTPException(404, "project not found")
-    allowed = {"title", "status", "topic_hint", "style_notes", "target_duration",
+    allowed = {"title", "status", "content_type", "topic_hint", "style_notes", "target_duration",
                "voice_profile_id", "language", "mode"}
     kw = {k: v for k, v in payload.items() if k in allowed}
+    if "content_type" in kw:
+        kw["content_type"] = content_mod.normalize_content_type(kw["content_type"])
     if "script" in payload:
         proj = st.db.get_project(project_id)
         if (proj.get("mode") or "A").upper() == "A" and not payload.get("director_override"):
@@ -227,8 +235,10 @@ async def api_duplicate(project_id: str, payload: dict = Body(default={})):
         raise HTTPException(404, "project not found")
     keep_scenes = bool(payload.get("keep_scenes", True))
     new_mode = str(payload.get("mode") or src.get("mode") or "A").upper()[:1]
-    title = (payload.get("title") or f"{src.get('title', 'Project')} (copy)")[:120]
+    title = khmer.truncate_clusters(payload.get("title") or f"{src.get('title', 'Project')} (copy)", 120)
+    new_ct = payload.get("content_type", src.get("content_type") or "explainer")
     proj = st.db.create_project(title=title, mode=new_mode, status="draft",
+                                content_type=content_mod.normalize_content_type(new_ct),
                                 language=src.get("language") or "km",
                                 script=src.get("script") or "",
                                 script_locked=(new_mode == "A"),
@@ -293,7 +303,7 @@ async def api_download_project(project_id: str, kind: str = "all"):
 
 def _safe_download_name(title, ext):
     base = khmer.strip_emoji_and_marks(title or "project")
-    base = "".join(c for c in base if c.isalnum() or c in " -_.")[:60].strip() or "project"
+    base = khmer.truncate_clusters("".join(c for c in base if c.isalnum() or c in " -_."), 60).strip() or "project"
     return base + ext
 
 
@@ -321,11 +331,11 @@ async def api_save_scenes(project_id: str, payload: dict = Body(...)):
         if not text:
             continue
         clean.append({"text": text,
-                      "visual_prompt": (s.get("visual_prompt") or "").strip()[:600],
-                      "mood_tag": (s.get("mood_tag") or "").strip()[:40],
+                      "visual_prompt": khmer.truncate_clusters((s.get("visual_prompt") or "").strip(), 600),
+                      "mood_tag": khmer.truncate_clusters((s.get("mood_tag") or "").strip(), 40),
                       "estimated_duration_sec": float(s.get("estimated_duration_sec") or 0),
                       "audio_duration": float(s.get("audio_duration") or 0),
-                      "sfx_prompt": (s.get("sfx_prompt") or "").strip()[:300]})
+                      "sfx_prompt": khmer.truncate_clusters((s.get("sfx_prompt") or "").strip(), 300)})
     if not clean:
         raise HTTPException(400, "no usable scenes")
     st.db.replace_scenes(project_id, clean)
@@ -384,7 +394,7 @@ async def api_regenerate_script(project_id: str, payload: dict = Body(default={}
         raise HTTPException(404, "project not found")
     if (proj.get("mode") or "A").upper() == "A":
         raise HTTPException(403, "Mode A scripts are the Director's — regeneration is disabled")
-    note = (payload.get("note") or "").strip()[:400]
+    note = khmer.truncate_clusters((payload.get("note") or "").strip(), 400)
     st.db.update_project(project_id, status="draft", regenerate_note=note) if False else None
     st.db.update_project(project_id, status="draft")
     st.db.update_project(project_id, settings={**(proj.get("settings") or {}),
@@ -647,6 +657,7 @@ async def api_settings():
             "llm_roles": {"keys": cfg_mod.LLM_ROLES, "labels": cfg_mod.LLM_ROLE_LABELS},
             "machine_profiles": cfg_mod.MACHINE_PROFILES,
             "defaults": cfg_mod.DEFAULTS, "style_guideline": style_mod.STYLE_GUIDELINE,
+            "content_types": content_mod.list_content_types(),
             "placeholders": __import__("ai_studio.workflows", fromlist=["KNOWN_PLACEHOLDERS"])
             .KNOWN_PLACEHOLDERS,
             "vram": {"limit_mb": cfg["vram"]["limit_mb"], "detected": plan.get("hardware")}}
@@ -902,7 +913,8 @@ async def api_voice_preview(voice_id: str, payload: dict = Body(default={})):
     if not prof:
         raise HTTPException(404, "voice profile not found")
     cfg, plan = st.resolved_cfg()
-    text = (payload.get("text") or "សួស្ដី។ ខ្ញុំកំពុងនិយាយដោយស្ងប់ស្ងាត់ និងមិនបោះបង់ទេ។")[:400]
+    text = khmer.truncate_clusters(payload.get("text")
+                                   or "សួស្ដី។ ខ្ញុំកំពុងនិយាយដោយស្ងប់ស្ងាត់ និងមិនបោះបង់ទេ។", 400)
     tmp = ensure_dir(os.path.join(st.data_root, "tmp"))
     base = os.path.join(tmp, f"prev_{voice_id}_base.wav")
     conv = os.path.join(tmp, f"prev_{voice_id}_final.wav")

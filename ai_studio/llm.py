@@ -227,6 +227,7 @@ def scenes_validator(expected_count=None, require_text=True):
                 "estimated_duration_sec": round(max(0.0, dur), 2),
                 "mood_tag": str(raw.get("mood_tag") or raw.get("mood") or "").strip().lower(),
                 "sfx_prompt": str(raw.get("sfx_prompt") or raw.get("ambience") or "").strip(),
+                "side": str(raw.get("side") or "").strip(),
                 "hook": str(raw.get("hook") or "").strip()[:60],
             })
         if not out:

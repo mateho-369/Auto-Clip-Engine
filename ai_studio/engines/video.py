@@ -16,7 +16,7 @@ guard's reduced frames/size → procedural previz (:mod:`ai_studio.previz`).
 import os
 import time
 
-from .. import workflows
+from .. import khmer, workflows
 from .. import previz
 from ..comfy import ComfyUIClient, ComfyError
 from ..util import ensure_dir, media_duration, rel
@@ -77,7 +77,7 @@ def _values(scene, cfg, target_duration, seed, out_prefix, frames, width, height
         "STEPS": int(v.get("steps", 20)), "CFG": float(v.get("cfg", 6.0)),
         "SHIFT": float(v.get("shift", 8.0)), "SEED": int(my_seed),
         "MOTION": float(v.get("motion_strength", 0.75)),
-        "TEXT": (scene.get("text") or "")[:400],
+        "TEXT": khmer.truncate_clusters(scene.get("text") or "", 400),
         "MOOD": scene.get("mood_tag") or "",
         "OUT_PREFIX": out_prefix,
     }

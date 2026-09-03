@@ -35,3 +35,9 @@ data/studio/
 data/studio.*/
 models/
 .venv-studio/
+web/node_modules/
+web/.vite/
+web/dist/
+web/*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts

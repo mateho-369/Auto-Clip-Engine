@@ -121,9 +121,21 @@ def create_app(data_root=None, enable_demo_seed=False):
             return HTMLResponse(f"<h1>{STUDIO_NAME}</h1><p>UI missing — API at /api/status</p>")
         with open(path, "r", encoding="utf-8") as f:
             html = f.read()
-        # mtime-versioned assets: an edited app.js/style.css can never be served stale
-        v = int(max(os.path.getmtime(os.path.join(STATIC_DIR, "app.js")),
-                    os.path.getmtime(os.path.join(STATIC_DIR, "style.css"))))
+        # mtime-versioned assets so an edited bundle is never served stale; the
+        # React build uses hashed Vite filenames, so this only affects dev edits.
+        stamps = []
+        for fn in ("index.html", "assets"):
+            p = os.path.join(STATIC_DIR, fn)
+            if os.path.exists(p):
+                try:
+                    stamps.append(os.path.getmtime(p))
+                except OSError:
+                    pass
+        for fn in ("app.js", "style.css"):          # legacy vanilla build names
+            p = os.path.join(STATIC_DIR, fn)
+            if os.path.exists(p):
+                stamps.append(os.path.getmtime(p))
+        v = int(max(stamps or [0]))
         html = (html.replace('href="/static/style.css"', f'href="/static/style.css?v={v}"')
                     .replace('src="/static/app.js"', f'src="/static/app.js?v={v}"'))
         return HTMLResponse(html, headers={"Cache-Control": "no-cache, must-revalidate"})

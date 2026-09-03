@@ -365,12 +365,13 @@ tests in `tests/test_studio_pipeline.py`.
 PYTHONPATH=. pytest tests/test_studio_text.py tests/test_studio_pipeline.py -q
 ```
 
-47 tests, no GPU and no network needed: Khmer text handling (segmentation, danda,
-syllable→duration, chunking), style-guardrail invariants, the settings clamps (including
-the 8 GB VRAM rules), the DAG (topology, ready/blocked sets, `stage#idx` keys),
-integrity enforcement for Mode A, the VRAM guard's arithmetic, a full 7-stage run in both
-modes through the fallback engines (asserting the final `.mp4` exists and has video+audio
-streams), resume inheritance, per-stage regeneration, review gating, a forced stage
+56 tests, no GPU and no network needed: Khmer text handling (segmentation, cluster-
+safe truncation, danda, syllable→duration, chunking), style-guardrail invariants, the
+settings clamps (including the 8 GB VRAM rules), the DAG (topology, ready/blocked sets,
+`stage#idx` keys), integrity enforcement for Mode A, the VRAM guard's arithmetic, a full
+7-stage run in both modes through the fallback engines (asserting the final `.mp4` exists
+and has video+audio streams), content_type round-trips and offline breakdown for every
+content type, resume inheritance, per-stage regeneration, review gating, a forced stage
 failure (retry count, specific surfaced error, dependents' behaviour, resumability), the
 event bus (WebSocket replay), settings persistence, and the HTTP surface with
 `TestClient`. ffmpeg-dependent tests skip themselves if ffmpeg is missing.
@@ -413,7 +414,42 @@ event bus (WebSocket replay), settings persistence, and the HTTP surface with
 * The `--demo` projects exist so the pipeline is testable in 30 seconds; they are marked
   `demo` in the dashboard and can be deleted in one click.
 
-## 12 · Licences
+## 13 · React/TypeScript frontend
+
+The UI is a React + TypeScript SPA (`web/`). It is built against the existing FastAPI
+HTTP/WebSocket surface — no backend business logic is required to run it. Two ways to
+serve it:
+
+**Production (recommended):** build into the Python static folder, then run the one
+existing studio process.
+
+```bash
+cd web
+npm install
+npm run build          # writes hashed files into ../ai_studio/static
+cd ..
+python -m ai_studio --port 8000
+```
+
+The Vite config uses `base: '/static/'` and `outDir: '../ai_studio/static'`, so the
+backend's existing `/` route and `/static` mount serve the bundle. `npm run build` is
+what CI/a fresh checkout should run before starting the studio.
+
+**Dev server:** while editing the UI, use Vite's proxy and keep FastAPI on 8000.
+
+```bash
+# terminal 1
+cd web && npm run dev   # http://localhost:5173, proxies /api and /files to :8000
+# terminal 2
+python -m ai_studio --port 8000
+```
+
+The app reads `content_types`, roles/engines, workflows and fix commands from the
+backend (`/api/settings`, `/api/workflows`, `/api/settings/probe`) rather than hardcoding
+them. The project list, content-type cards, live pipeline graph, scene inspector,
+services panel, team and plugins screens are all wired to those endpoints.
+
+## 14 · Licences
 
 `vits-mms-*` weights: **CC-BY-NC 4.0** (Meta) — fine for your own channel, verify before
 monetising. `sailor2`: Apache-2.0. Wan 2.1/2.2: Apache-2.0. MMAudio: check the repo's licence

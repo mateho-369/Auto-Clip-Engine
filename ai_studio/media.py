@@ -15,7 +15,6 @@ import re
 import shutil
 import subprocess
 import threading
-import unicodedata
 
 from .util import (ensure_dir, ffmpeg_exe, media_duration, read_wav, rel, run_ffmpeg,
                    wav_duration, write_wav)
@@ -393,19 +392,14 @@ _KHMER_BREAK_CHARS = "។៕៖,.!? "
 def _safe_khmer_cut(text, cut):
     """Never let a line break land inside a Khmer grapheme cluster.
 
-    Khmer dependent vowels/diacritics are combining marks (Unicode category
-    Mn/Mc) that must stay glued to the base consonant before them, and the
-    coeng sign (U+17D2) glues to the consonant *after* it to form a stacked
-    subscript — breaking between either pair renders as visibly broken
-    script (a bare "ភ" on one line, the subscript "្លែត" orphaned on the
-    next). Back the cut up until neither case applies.
+    Uses :func:`ai_studio.khmer.cluster_boundary`, which walks the real Khmer
+    character-cluster structure (base + COENG subscripts + combining marks)
+    rather than the old one-codepoint heuristic.  Kept as a tiny wrapper so the
+    caption code reads the same as before while delegating the hard part to
+    the shared, tested KCC implementation.
     """
-    while cut > 0 and (
-        (cut < len(text) and unicodedata.category(text[cut])[0] == "M")
-        or text[cut - 1] == "្"
-    ):
-        cut -= 1
-    return max(cut, 1)
+    from .khmer import cluster_boundary
+    return max(1, cluster_boundary(text, cut))
 
 
 def _wrap_khmer(text, max_chars=16):

@@ -32,14 +32,15 @@ SAMPLE_TOPICS_B = [
 
 SEED = [
     {"title": "កុំបោះបង់ · Don't give up (Mode A)", "mode": "A",
-     "script": SAMPLE_SCRIPT_A, "status": "ready", "target_duration": 30,
-     "style_notes": "", "topic_hint": ""},
+     "content_type": "explainer", "script": SAMPLE_SCRIPT_A, "status": "ready",
+     "target_duration": 30, "style_notes": "", "topic_hint": ""},
     {"title": "សេចក្ដីសង្ឃឹម · Hope when tired (Mode B)", "mode": "B",
-     "topic_hint": SAMPLE_TOPICS_B[0][0], "status": "draft", "target_duration": 24,
+     "content_type": "what_if", "topic_hint": SAMPLE_TOPICS_B[0][0], "status": "draft",
+     "target_duration": 24,
      "style_notes": "a little more practical advice in the middle", "script": ""},
     {"title": "New short · try the New Project flow", "mode": "B",
-     "topic_hint": "ការចាប់ផ្ដើមឡើងវិញ", "status": "draft", "target_duration": 20,
-     "style_notes": "", "script": ""},
+     "content_type": "quick_tip", "topic_hint": "ការចាប់ផ្ដើមឡើងវិញ", "status": "draft",
+     "target_duration": 20, "style_notes": "", "script": ""},
 ]
 
 
@@ -56,6 +57,7 @@ def seed_demo_projects(st, force=False):
         script = khmer.normalize_block(entry.get("script") or "")
         proj = st.db.create_project(title=entry["title"], mode=entry["mode"],
                                     status=entry["status"], script=script,
+                                    content_type=entry.get("content_type") or "explainer",
                                     script_locked=(entry["mode"] == "A"),
                                     script_origin="director" if entry["mode"] == "A" else "",
                                     topic_hint=entry.get("topic_hint", ""),

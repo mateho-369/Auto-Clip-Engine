@@ -15,7 +15,7 @@ import threading
 
 from .util import jdump, jload, new_id, now
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(
@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS projects(
   title TEXT NOT NULL DEFAULT 'Untitled',
   mode TEXT NOT NULL DEFAULT 'A',                 -- 'A' = Director script, 'B' = auto idea
   status TEXT NOT NULL DEFAULT 'draft',           -- draft|review|ready|rendering|done|failed|archived
+  content_type TEXT NOT NULL DEFAULT 'explainer', -- explainer|what_if|compare|choose|word_nuance|myth_vs_fact|quick_tip
   language TEXT NOT NULL DEFAULT 'km',
   script TEXT NOT NULL DEFAULT '',
   script_locked INTEGER NOT NULL DEFAULT 0,       -- Mode A: no agent may rewrite
@@ -156,8 +157,8 @@ CREATE TABLE IF NOT EXISTS events(
 CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, id);
 """
 
-PROJECT_COLS = ("id,title,mode,status,language,script,script_locked,script_origin,topic_hint,"
-                "style_notes,target_duration,voice_profile_id,settings_json,parent_id,"
+PROJECT_COLS = ("id,title,mode,status,content_type,language,script,script_locked,script_origin,"
+                "topic_hint,style_notes,target_duration,voice_profile_id,settings_json,parent_id,"
                 "last_run_id,created_at,updated_at")
 
 
@@ -186,8 +187,17 @@ class Database:
         con = self._conn()
         with self._lock:
             con.executescript(SCHEMA)
+            self._migrate(con)
             con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",
                         (str(SCHEMA_VERSION),))
+
+    def _migrate(self, con):
+        """Add columns introduced after schema v1 to databases created earlier."""
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(projects)").fetchall()}
+        if "content_type" not in cols:
+            con.execute("ALTER TABLE projects ADD COLUMN content_type TEXT NOT NULL DEFAULT 'explainer'")
+        rows = con.execute("PRAGMA table_info(scenes)").fetchall()
+        _ = rows  # reserved for future scene-level migrations
 
     def close(self):
         con = getattr(self._local, "con", None)
@@ -213,9 +223,10 @@ class Database:
         pid = kw.get("id") or f"p{new_id(7)}"
         ts = now()
         self.execute(
-            f"INSERT INTO projects ({PROJECT_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            f"INSERT INTO projects ({PROJECT_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (pid, kw.get("title") or "Untitled", kw.get("mode") or "A", kw.get("status") or "draft",
-             kw.get("language") or "km", kw.get("script") or "", 1 if kw.get("script_locked") else 0,
+             kw.get("content_type") or "explainer", kw.get("language") or "km",
+             kw.get("script") or "", 1 if kw.get("script_locked") else 0,
              kw.get("script_origin") or "", kw.get("topic_hint") or "", kw.get("style_notes") or "",
              float(kw.get("target_duration") or 30), kw.get("voice_profile_id") or "",
              jdump(kw.get("settings") or {}), kw.get("parent_id") or "", kw.get("last_run_id"),
@@ -232,9 +243,9 @@ class Database:
         return row
 
     def update_project(self, pid, **kw):
-        allowed = {"title", "mode", "status", "language", "script", "script_locked", "script_origin",
-                   "topic_hint", "style_notes", "target_duration", "voice_profile_id", "settings_json",
-                   "parent_id", "last_run_id"}
+        allowed = {"title", "mode", "status", "content_type", "language", "script", "script_locked",
+                   "script_origin", "topic_hint", "style_notes", "target_duration",
+                   "voice_profile_id", "settings_json", "parent_id", "last_run_id"}
         sets, params = [], []
         for k, v in kw.items():
             if k == "settings":
@@ -275,8 +286,8 @@ class Database:
                  "title_asc": "title COLLATE NOCASE ASC", "title_desc": "title COLLATE NOCASE DESC",
                  "created_desc": "created_at DESC", "status_asc": "status ASC, updated_at DESC"}.get(
             sort, "updated_at DESC")
-        sql = ("SELECT id,title,mode,status,language,target_duration,script_origin,voice_profile_id,"
-               "parent_id,last_run_id,created_at,updated_at,"
+        sql = ("SELECT id,title,mode,status,content_type,language,target_duration,script_origin,"
+               "voice_profile_id,parent_id,last_run_id,created_at,updated_at,"
                "substr(script,1,240) AS script_excerpt, length(script) AS script_chars,"
                "(SELECT COUNT(*) FROM scenes s WHERE s.project_id=projects.id) AS scene_count,"
                "(SELECT COUNT(*) FROM runs r WHERE r.project_id=projects.id) AS run_count,"
@@ -315,7 +326,12 @@ class Database:
     def list_scenes(self, pid):
         rows = self.query("SELECT * FROM scenes WHERE project_id=? ORDER BY idx ASC", (pid,))
         for r in rows:
-            r["meta"] = jload(r.pop("meta_json", "{}"), {})
+            meta = jload(r.pop("meta_json", "{}"), {})
+            inner = meta.pop("meta", None)          # older boards nested scene meta
+            if isinstance(inner, dict):
+                for k, v in inner.items():
+                    meta.setdefault(k, v)
+            r["meta"] = meta
             r["estimated_duration_sec"] = r.get("est_duration") or 0
         return rows
 

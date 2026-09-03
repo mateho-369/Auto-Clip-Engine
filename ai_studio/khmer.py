@@ -15,10 +15,14 @@ import unicodedata
 
 # Khmer script block + the punctuation/zero-width characters we care about.
 KHMER_RANGE = (0x1780, 0x17FF)
+KHMER_BASE_RANGE = (0x1780, 0x17B3)   # verified against Unicode Khmer chart:
+# consonants (U+1780-U+17A2) + independent vowels (U+17A3-U+17B3) are all
+# Unicode category Lo.  U+17B4+ (vowel signs / vocalic signs / COENG) are marks.
 KHMER_DIGITS = "០១២៣៤៥៦៧៨៩"
 ZWSP = "\u200b"
 ZWJ = "\u200d"
 LRM = "\u200e"
+COENG = "\u17d2"
 
 _SENT_END_KH = "។៕៙៚!?။"            # ។ khmer period, plus latin marks
 _SOFT_BREAK = re.compile(r"[,;:\u1784\u179A]?")  # noqa: RUF001 (harmless)
@@ -127,6 +131,112 @@ def estimate_speech_seconds(text, wpm=None, calm=1.0):
     return round(syl / rate + 0.35, 2)      # + tail ring-down
 
 
+# ------------------------------------------------- Khmer character clusters
+def _khmer_base(ch):
+    """A Khmer consonant or independent vowel (Unicode category Lo in block)."""
+    return bool(ch) and KHMER_RANGE[0] <= ord(ch) <= KHMER_RANGE[1] and unicodedata.category(ch) == "Lo"
+
+
+def _khmer_mark(ch):
+    """A Khmer combining/attached glyph (vowel sign, vocalic sign, COENG, ...)."""
+    return bool(ch) and KHMER_RANGE[0] <= ord(ch) <= KHMER_RANGE[1] and unicodedata.category(ch).startswith("M")
+
+
+def split_clusters(text):
+    """Split a string into Khmer character clusters (KCC).
+
+    Khmer is an abugida: ``COENG (U+17D2) + consonant`` is a subscript that is
+    never allowed to be separated from the base it subscripts, and dependent
+    vowels/signs are combining marks that must stay glued to the base.  Walking
+    from a Khmer base this function consumes every following COENG pair and
+    every following combining mark, so the returned strings are safe truncation
+    and line-break units.  Non-Khmer characters become their own single-char
+    unit (a following Unicode combining mark is kept with its base for Latin
+    too, so general text is not damaged either).
+    """
+    out, i, n = [], 0, len(text or "")
+    while i < n:
+        ch = text[i]
+        if _khmer_base(ch):
+            j = i + 1
+            while j < n:
+                nxt = text[j]
+                if nxt == COENG:
+                    j += 1
+                    if j < n:
+                        j += 1                       # absorb the subscript consonant
+                    continue
+                if _khmer_mark(nxt):
+                    j += 1
+                    continue
+                break
+            out.append(text[i:j])
+            i = j
+            continue
+        # non-base character
+        if unicodedata.category(ch).startswith("M") and out:
+            out[-1] = out[-1] + ch                   # Latin/other combining mark
+        else:
+            out.append(ch)
+        i += 1
+    return out
+
+
+def cluster_count(text):
+    """Number of Khmer character clusters (raw chars for plain Latin text)."""
+    return len(split_clusters(text or ""))
+
+
+def cluster_len(text):
+    """Length in characters, but never counting a cluster boundary mid-grapheme."""
+    return len(text or "")
+
+
+def cluster_cut(text, count):
+    """Character index after ``count`` clusters (used to continue a split)."""
+    if count <= 0:
+        return 0
+    pos = 0
+    for i, cl in enumerate(split_clusters(text or "")):
+        if i >= int(count):
+            break
+        pos += len(cl)
+    return pos
+
+
+def cluster_boundary(text, index):
+    """The largest cut at or before ``index`` that does not split a cluster.
+
+    Used by caption/line wrappers that must slice by raw index for performance.
+    """
+    index = max(0, min(index, len(text or "")))
+    if index == 0:
+        return 0
+    pos = 0
+    for cl in split_clusters(text or ""):
+        pos += len(cl)
+        if pos >= index:
+            return pos if index == pos else pos - len(cl)
+    return pos
+
+
+def truncate_clusters(text, max_clusters, suffix="…"):
+    """Truncate by *cluster* count, never inside a Khmer cluster.
+
+    ``suffix`` is appended only when truncation actually happened.  For plain
+    Latin/mixed text a cluster is one character, so this is a drop-in safe
+    replacement for ``text[:n]``.
+    """
+    if not text:
+        return ""
+    clusters = split_clusters(text)
+    if len(clusters) <= max(0, int(max_clusters)):
+        return text
+    if max_clusters <= 0:
+        return str(suffix or "")
+    return "".join(clusters[:int(max_clusters)]).strip() + (suffix or "")
+
+
 # -------------------------------------------------------------- segmentation
 def split_sentences(text, max_chars=None):
     """Split a script into ordered sentences, honouring newlines as hard breaks.
@@ -156,10 +266,20 @@ def split_sentences(text, max_chars=None):
 
 
 def _hard_split(sentence, max_chars):
-    """Split on Khmer spaces (then commas) to respect the char budget."""
+    """Split on Khmer spaces (then commas) to respect the cluster budget.
+
+    ``max_chars`` is interpreted as *clusters* for Khmer text (the "n" unit used
+    throughout this module), so a COENG subscript can never be sliced off its
+    base when a long over-budget sentence is forced through ``split_sentences``.
+    """
+    use_clusters = is_khmer(sentence)
+
+    def unit(text):
+        return cluster_count(text) if use_clusters else len(text)
+
     chunks, cur = [], ""
     for piece in re.split(r"(?<= )", sentence):
-        if len(cur) + len(piece) > max_chars and cur:
+        if unit(cur) + unit(piece) > max_chars and cur:
             chunks.append(cur.strip())
             cur = piece
         else:
@@ -169,9 +289,14 @@ def _hard_split(sentence, max_chars):
     # last resort: a single "word" longer than the budget
     final = []
     for c in chunks:
-        while len(c) > max_chars * 1.6:
-            final.append(c[:max_chars].strip())
-            c = c[max_chars:].strip()
+        while unit(c) > max_chars * 1.6:
+            if use_clusters:
+                cut = cluster_cut(c, max_chars)
+                final.append(truncate_clusters(c, max_chars, suffix="").strip())
+                c = c[cut:].strip()
+            else:
+                final.append(c[:max_chars].strip())
+                c = c[max_chars:].strip()
         if c:
             final.append(c)
     return final
@@ -246,8 +371,12 @@ def looks_like_markdown_or_notes(text):
 
 
 def title_from(text, maxlen=64):
-    """Short title for a project card: first sentence, trimmed."""
+    """Short title for a project card: first sentence, trimmed by cluster.
+
+    ``maxlen`` is the old character budget; for Khmer it is treated as a cluster
+    budget so truncation can never separate a COENG subscript from its base.
+    """
     sents = split_sentences(text, max_chars=None)
     first = sents[0] if sents else normalize(text)
     first = strip_emoji_and_marks(first).rstrip(_SENT_END_KH)
-    return (first[:maxlen] + "…") if len(first) > maxlen else (first or "Untitled")
+    return truncate_clusters(first, maxlen) if first else "Untitled"

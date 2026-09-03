@@ -12,15 +12,16 @@ Three things live here because they are *algorithms*, not opinions:
 import hashlib
 import random
 
-from .. import khmer, style as style_mod
+from .. import content as content_mod, khmer, style as style_mod
 
 
 # --------------------------------------------------------------- Stage 1 core
-def deterministic_breakdown(script, cfg, plan_scenes=None):
+def deterministic_breakdown(script, cfg, plan_scenes=None, content_type="explainer"):
     """Split a finished script into scenes sized for calm narration.
 
     `plan_scenes` (when the Director edited the board) takes precedence: we keep
     their text/visual prompts and only fill the holes + re-estimate timing.
+    `content_type` shapes the per-scene metadata/side tags even when Ollama is off.
     """
     p = cfg.get("pipeline", {})
     target = float(p.get("scene_target_seconds", style_mod.SCENE_TARGET_SECONDS))
@@ -47,7 +48,7 @@ def deterministic_breakdown(script, cfg, plan_scenes=None):
                            "mood_tag": mood, "estimated_duration_sec": round(est, 2),
                            "sfx_prompt": s.get("sfx_prompt") or style_mod.ambience_for(mood, visual),
                            "source": s.get("source") or "director-board"})
-        return scenes[:limit] if scenes else []
+        return _content_tag_scenes(scenes[:limit], content_type) if scenes else []
 
     sentences = khmer.split_sentences(script, max_chars=max_chars)
     sentences = [khmer.strip_emoji_and_marks(s) for s in sentences]
@@ -82,7 +83,7 @@ def deterministic_breakdown(script, cfg, plan_scenes=None):
         scenes = _merge_to_limit(scenes, limit, cfg)
     for i, sc in enumerate(scenes):
         sc["index"] = i
-    return scenes
+    return _content_tag_scenes(scenes, content_type)
 
 
 def _make_scene(sentences, dur, cfg):
@@ -119,6 +120,43 @@ def _blend_prompts(a, b):
     if not b or a == b:
         return a
     return f"{a}; then {b}" if a else b
+
+
+def _content_tag_scenes(scenes, content_type):
+    """Attach content-type side/visual metadata to deterministic scenes.
+
+    ``compare``/``word_nuance`` split on **sentence count** rather than pure scene
+    index, so a script that genuinely has two halves keeps them balanced even if
+    the mechanical packer merged or split differently.
+    """
+    ct = content_mod.normalize_content_type(content_type)
+    total_sents = sum(int(s.get("sentence_count") or 1) for s in scenes or [])
+    running = 0
+    out = []
+    for i, s in enumerate(scenes or []):
+        sc = dict(s)
+        meta = dict(sc.get("meta") or {})
+        count = max(1, int(sc.get("sentence_count") or 1))
+        running += count
+        if ct == "compare":
+            side = "A" if running <= total_sents / 2 else "B"
+        elif ct == "word_nuance":
+            side = "meaning-1" if running <= total_sents / 2 else "meaning-2"
+        elif ct == "myth_vs_fact":
+            side = "myth" if running <= total_sents / 2 else "fact"
+        else:
+            side = content_mod.scene_tag(ct, i, max(1, len(scenes or [])))
+        meta["content_type"] = ct
+        meta["content_side"] = side
+        meta["scene_index"] = i
+        meta["scene_count"] = len(scenes or [])
+        sc["meta"] = meta
+        tail = content_mod.visual_tail(ct)
+        vp = (sc.get("visual_prompt") or "").strip()
+        if tail and tail.lower() not in vp.lower():
+            sc["visual_prompt"] = khmer.truncate_clusters(f"{vp}; {tail}" if vp else tail, 700)
+        out.append(sc)
+    return out
 
 
 # ------------------------------------------------- Mode A integrity contract
@@ -191,15 +229,64 @@ CLOSING = [
 ]
 
 
-def template_script(topic, cfg=None):
+# Deterministic content-type script shapes (all Khmer, placeholder {topic}).
+CT_SCRIPT_SHAPES = {
+    "explainer": lambda t, r: [r.choice(OPENINGS), BODY_A[0].format(topic=t), r.choice(BODY_B),
+                               r.choice(STEP), r.choice(CLOSING)],
+    "what_if": lambda t, r: [
+        f"ចុះបើយើងសាកម្តងផ្ទុយពីធម្មតា៖ {t}?",
+        "រឿងនេះ មិនមែនជាការស្រមើស្រមៃទទេ វាគឺជាមធ្យោបាយមួយដើម្បីមើលឃើញបញ្ហាឡើងវិញ។",
+        "បើយើងធ្វើដូចនោះសប្តាហ៍មួយ យើងអាចសង្កេតឃើញភាពខុសគ្នាដ៏ស្ងៀមស្ងាត់។",
+        "ចុងក្រោយ សំណួរមិនមែនថាអ្វីត្រឹមត្រូវទេ ប៉ុន្តែថាតើការសង្កេតនោះបង្ហាញយើងនូវអ្វី។",
+        r.choice(CLOSING),
+    ],
+    "compare": lambda t, r: [
+        f"ថ្ងៃនេះ យើងប្រៀបធៀប {t} ជាពីរផ្នែក។",
+        f"ផ្នែក A៖ {t} គឺសាមញ្ញ រហ័ស និងច្បាស់ភ្លាមៗ។",
+        f"ផ្នែក B៖ {t} គឺយឺតជាង ប៉ុន្តែផ្តល់ភាពច្បាស់ក្នុងរយៈពេលយូរ។",
+        "បើអ្នកត្រូវការលទ្ធផលភ្លាមៗ A សមជាង។ បើអ្នកចង់យល់ជាង A ជម្រើស B គឺសមជាង។",
+        "ដូច្នេះ ជម្រើសមិនមែនជាសត្រូវទេ វាគ្រាន់តែជាការជ្រើសរើសតាមគោលដៅ។",
+    ],
+    "choose": lambda t, r: [
+        f"ចង់សម្រេចចិត្តលើ {t}? យើងអាចមើលវាជាពីរជម្រើស។",
+        "ជម្រើសទី១៖ លឿន ងាយ ប៉ុន្តែអាចមិនយូរអង្វែង។",
+        "ជម្រើសទី២៖ ត្រូវការពេលច្រើន ប៉ុន្តែផ្តល់ភាពធូរស្រាលជាង។",
+        "ប្រសិនបើអ្នកមានពេលតិច សូមជ្រើសជម្រើសទី១។ បើអ្នកមានពេលគ្រប់គ្រាន់ ជម្រើសទី២ គឺប្រសើរជាង។",
+        "ភាគច្រើន ចម្លើយគឺអាស្រ័យលើពេលវេលា និងអាទិភាពរបស់អ្នក។",
+    ],
+    "word_nuance": lambda t, r: [
+        f"ពាក្យ \"{t}\" អាចមានអត្ថន័យពីរផ្សេងគ្នា។",
+        "អត្ថន័យទី១៖ វាមានន័យថា ... ឧទាហរណ៍៖ សព្វថ្ងៃនេះ ខ្ញុំយល់អ្វីមួយថ្មី។",
+        "អត្ថន័យទី២៖ វាក៏អាចមានន័យថា ... ឧទាហរណ៍៖ អ្នកយល់ពីអារម្មណ៍របស់ខ្ញុំ។",
+        "ដូច្នេះ មុននឹងប្រើពាក្យនេះ សូមមើលបរិបទឲ្យច្បាស់។",
+        "នេះជាការខុសគ្នាតូច ប៉ុន្តែវាធ្វើឲ្យការសន្ទនារបស់អ្នកច្បាស់ជាង។",
+    ],
+    "myth_vs_fact": lambda t, r: [
+        f"មានជំនឿថា {t} គឺពិបាកណាស់។",
+        "មនុស្សច្រើនតែជឿដូចនេះ ព្រោះពួកគេឃើញតែការបរាជ័យខ្លះៗ។",
+        "ប៉ុន្តែការពិតគឺ {t} គឺអាចធ្វើបាន ដោយចាប់ផ្តើមមួយជំហានតូច។",
+        "ការបរាជ័យម្តង មិនមែនជាសញ្ញាថាវាមិនអាចទេ វាគ្រាន់តែជាផ្នែកនៃផ្លូវ។",
+        "នៅពេលអ្នកដឹងការពិតនេះ អ្នកអាចធ្វើសកម្មភាពដោយស្ងប់ស្ងាត់ជាង។",
+    ],
+    "quick_tip": lambda t, r: [
+        f"គន្លឹះរហ័សមួយ៖ {t} ។",
+        "សូមចាប់ផ្តើមត្រឹមតែមួយជំហានតូច មុនពេលអ្នកធ្វើអ្វីផ្សេង។",
+        "ធ្វើវានៅពេលនេះ ហើយមើលលទ្ធផលនៅថ្ងៃស្អែក។",
+        r.choice(CLOSING),
+    ],
+}
+
+
+def template_script(topic, cfg=None, content_type="explainer"):
     """Formulaic but real Khmer — the 'never dead-end' Mode B writer."""
-    topic = khmer.strip_emoji_and_marks(topic or "")[:80] or "ការមិនបោះបង់ចិត្ត"
-    seed = int(hashlib.sha256((topic + str(len(topic))).encode("utf-8")).hexdigest()[:6], 16)
+    ct = content_mod.normalize_content_type(content_type)
+    topic = khmer.truncate_clusters(khmer.strip_emoji_and_marks(topic or ""), 80) or "ការមិនបោះបង់ចិត្ត"
+    seed = int(hashlib.sha256((topic + str(len(topic)) + ct).encode("utf-8")).hexdigest()[:6], 16)
     rng = random.Random(seed)
-    want_sec = float((cfg or {}).get("target_duration") or 30.0) or 30.0
+    want_sec = float((cfg or {}).get("target_duration") or content_mod.default_duration(ct)) \
+        or content_mod.default_duration(ct)
     calm = float((cfg or {}).get("pipeline", {}).get("pace_calm", 1.15))
-    lines = [rng.choice(OPENINGS), BODY_A[0].format(topic=topic), rng.choice(BODY_B),
-             rng.choice(STEP), rng.choice(CLOSING)]
+    lines = CT_SCRIPT_SHAPES.get(ct, CT_SCRIPT_SHAPES["explainer"])(topic, rng)
     script = "\n".join(lines)
     # length pass: add gentle middle beats until we approach the requested runtime
     extras = BODY_A[1:] + BODY_B + STEP
@@ -208,10 +295,10 @@ def template_script(topic, cfg=None):
            and tries < 6):
         script = script.rstrip() + "\n" + rng.choice(extras)
         tries += 1
-    title = topic[:70]
+    title = khmer.truncate_clusters(topic, 70)
     return {"title": title, "script": script.strip(),
             "logline": f"សារថ្ងៃនេះ៖ {topic}", "engine": "template",
-            "beat_count": len(lines) + tries}
+            "content_type": ct, "beat_count": len(lines) + tries}
 
 
 # ------------------------------------------------------------------- QA core

@@ -194,7 +194,7 @@ class RunContext:
 
 def scene_dict_for_prompt(scene):
     """The compact scene view handed to models / stored in prompt logs."""
-    return {"idx": scene.get("idx"), "text": (scene.get("text") or "")[:900],
+    return {"idx": scene.get("idx"), "text": khmer.truncate_clusters(scene.get("text") or "", 900),
             "visual_prompt": scene.get("visual_prompt") or "",
             "mood_tag": scene.get("mood_tag") or "",
             "estimated_duration_sec": scene.get("estimated_duration_sec"),

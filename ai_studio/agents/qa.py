@@ -49,9 +49,9 @@ async def review_scene(llm, scene, asset_facts, cfg, scene_idx, run_id="", proje
 
     payload = {
         "scene_index": int(scene_idx),
-        "text": (scene.get("text") or "")[:1200],
+        "text": khmer.truncate_clusters(scene.get("text") or "", 1200),
         "language": "km",
-        "visual_prompt": (scene.get("visual_prompt") or "")[:400],
+        "visual_prompt": khmer.truncate_clusters(scene.get("visual_prompt") or "", 400),
         "mood_tag": scene.get("mood_tag") or "",
         "voice_duration_sec": asset_facts.get("voice", {}).get("duration") if isinstance(
             asset_facts.get("voice"), dict) else asset_facts.get("voice_duration"),
@@ -68,9 +68,10 @@ async def review_scene(llm, scene, asset_facts, cfg, scene_idx, run_id="", proje
         for it in issues:
             sev = str(it.get("severity") or "warn").lower()
             out["issues"].append({"severity": "fail" if sev == "fail" else "warn",
-                                  "issue": str(it.get("issue") or "")[:280], "source": "llm"})
+                                  "issue": khmer.truncate_clusters(str(it.get("issue") or ""), 280),
+                                  "source": "llm"})
         if data.get("summary"):
-            out["summary"] = str(data["summary"])[:400]
+            out["summary"] = khmer.truncate_clusters(str(data["summary"]), 400)
         if data.get("approved") is False:
             out["approved"] = False
         out["engine"] = f"ollama:{meta.get('model', '')}"
