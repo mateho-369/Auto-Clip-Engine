@@ -414,40 +414,43 @@ event bus (WebSocket replay), settings persistence, and the HTTP surface with
 * The `--demo` projects exist so the pipeline is testable in 30 seconds; they are marked
   `demo` in the dashboard and can be deleted in one click.
 
-## 13 · React/TypeScript frontend
+## 13 · Frontend
 
-The UI is a React + TypeScript SPA (`web/`). It is built against the existing FastAPI
-HTTP/WebSocket surface — no backend business logic is required to run it. Two ways to
-serve it:
+**Served UI (default):** the battle-tested vanilla console in
+`ai_studio/static/` (`index.html` + `app.js` + `style.css`). This is the version with
+100% feature parity — Projects, New (with Mode A/B, voice profile, engine overrides),
+the full Project workspace (script, storyboard board, per-stage stepper, inspector,
+downloads, run log), Voices, Memory, Settings, live WebSocket/SSE/polling. It is served
+automatically by:
 
-**Production (recommended):** build into the Python static folder, then run the one
-existing studio process.
+```bash
+python -m ai_studio --port 8000      # http://localhost:8000
+```
+
+Do **not** run the React `npm run build` until you deliberately want to switch frontends
+(see below), because a Vite build configured for `ai_studio/static` would replace the
+proven console.
+
+**React + TypeScript prototype (`web/`):** the modern dark tool-style SPA is
+maintained in `web/`. It is built against the same API/WebSocket surface and currently
+covers projects/new content-type cards, settings/team/plugins/services, the live DAG and
+scene inspector. Because the user explicitly asked for the new UI to have the same
+behaviour as the old UI, the default preview stays on the old console until the React
+port reaches full feature parity.
+
+Build the React prototype without touching the served UI:
 
 ```bash
 cd web
 npm install
-npm run build          # writes hashed files into ../ai_studio/static
-cd ..
-python -m ai_studio --port 8000
+npm run build          # writes into ignored ../static-react, NOT ai_studio/static
 ```
 
-The Vite config uses `base: '/static/'` and `outDir: '../ai_studio/static'`, so the
-backend's existing `/` route and `/static` mount serve the bundle. `npm run build` is
-what CI/a fresh checkout should run before starting the studio.
-
-**Dev server:** while editing the UI, use Vite's proxy and keep FastAPI on 8000.
+Dev server (proxies API to FastAPI on 8000):
 
 ```bash
-# terminal 1
-cd web && npm run dev   # http://localhost:5173, proxies /api and /files to :8000
-# terminal 2
-python -m ai_studio --port 8000
+cd web && npm run dev
 ```
-
-The app reads `content_types`, roles/engines, workflows and fix commands from the
-backend (`/api/settings`, `/api/workflows`, `/api/settings/probe`) rather than hardcoding
-them. The project list, content-type cards, live pipeline graph, scene inspector,
-services panel, team and plugins screens are all wired to those endpoints.
 
 ## 14 · Licences
 

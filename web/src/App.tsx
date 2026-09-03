@@ -180,6 +180,23 @@ export default function App() {
     if (data) setWorkflows((data as any).workflows || []);
   }, [request]);
 
+  const openNewProject = useCallback(() => {
+    setSelected('');
+    setDetail(null);
+    setRun(null);
+    setSelectedScene(null);
+    setSelectedStage('');
+    setForm({
+      mode: 'A',
+      content_type: form.content_type || 'explainer',
+      script: '',
+      topic_hint: '',
+      target_duration: 30,
+      style_notes: '',
+    });
+    setView('project');
+  }, [form.content_type]);
+
   useEffect(() => {
     (async () => {
       await Promise.all([loadProjects(), loadSettings(), loadStatus(), loadWorkflows()]);
@@ -366,7 +383,7 @@ export default function App() {
           <div><strong>Studio</strong><small>{status?.version || ''}</small></div>
         </div>
         <div className="rail-actions">
-          <button className="btn primary" onClick={() => setView('project')}>+ New project</button>
+          <button className="btn primary" onClick={openNewProject}>+ New project</button>
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search projects…" />
         </div>
         <div className="project-list">

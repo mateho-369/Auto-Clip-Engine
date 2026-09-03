@@ -1,14 +1,17 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// The studio uses `npm run build` to output directly into the Python app's
-// static root, so a single FastAPI process serves both the API and the UI.
-// `/static/` base is required because the FastAPI app only mounts /static.
+// The FastAPI studio serves the battle-tested vanilla console from
+// ai_studio/static (it is what the user asked to keep 100% functional).
+// This Vite project is the maintained React prototype and is built into a
+// separate ignored folder so `npm run build` can never overwrite the served
+// vanilla index/app.js/style.css. To switch to it, point FastAPI at the
+// output (or copy the built files) deliberately.
 export default defineConfig({
   plugins: [react()],
-  base: '/static/',
+  base: '/static/react/',
   build: {
-    outDir: '../ai_studio/static',
+    outDir: '../static-react',
     emptyOutDir: true,
     sourcemap: true,
   },
