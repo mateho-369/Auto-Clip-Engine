@@ -489,7 +489,7 @@ def _stage_error(sp, err):
 
 def _plan_summary(plan):
     out = {}
-    for k in ("tts", "rvc", "video", "sfx"):
+    for k in ("tts", "rvc", "video", "sfx", "talking_head", "illustration"):
         if isinstance((plan or {}).get(k), dict):
             out[k] = {"engine": plan[k].get("engine"), "reason": plan[k].get("reason", "")}
     hw = (plan or {}).get("hardware") or {}

@@ -15,7 +15,7 @@ import threading
 
 from .util import jdump, jload, new_id, now
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(
@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS projects(
   style_notes TEXT NOT NULL DEFAULT '',
   target_duration REAL NOT NULL DEFAULT 30,
   voice_profile_id TEXT NOT NULL DEFAULT '',
+  content_type TEXT NOT NULL DEFAULT 'explainer', -- creative framing (content.py)
+  character_id TEXT NOT NULL DEFAULT '',          -- saved character (characters.id)
   settings_json TEXT NOT NULL DEFAULT '{}',        -- per-project overrides (reuse prompts/settings)
   parent_id TEXT NOT NULL DEFAULT '',
   last_run_id TEXT,
@@ -126,6 +128,21 @@ CREATE TABLE IF NOT EXISTS prompts(
 );
 CREATE INDEX IF NOT EXISTS idx_prompts_lookup ON prompts(project_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS characters(
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL DEFAULT 'Character',
+  notes TEXT NOT NULL DEFAULT '',
+  created_at REAL
+);
+CREATE TABLE IF NOT EXISTS character_images(
+  id TEXT PRIMARY KEY,
+  character_id TEXT NOT NULL,
+  expression_label TEXT NOT NULL DEFAULT 'neutral',
+  image_path TEXT NOT NULL DEFAULT '',
+  created_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_char_images ON character_images(character_id);
+
 CREATE TABLE IF NOT EXISTS voice_profiles(
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -157,8 +174,8 @@ CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, id);
 """
 
 PROJECT_COLS = ("id,title,mode,status,language,script,script_locked,script_origin,topic_hint,"
-                "style_notes,target_duration,voice_profile_id,settings_json,parent_id,"
-                "last_run_id,created_at,updated_at")
+                "style_notes,target_duration,voice_profile_id,content_type,character_id,"
+                "settings_json,parent_id,last_run_id,created_at,updated_at")
 
 
 class Database:
@@ -186,8 +203,18 @@ class Database:
         con = self._conn()
         with self._lock:
             con.executescript(SCHEMA)
+            # schema v2: content_type + character_id on projects, character tables
+            self._migrate(con)
             con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",
                         (str(SCHEMA_VERSION),))
+
+    def _migrate(self, con):
+        """Additive migrations for databases created before this version."""
+        cols = {r["name"] for r in self.query("PRAGMA table_info(projects)")}
+        if "content_type" not in cols:
+            con.execute("ALTER TABLE projects ADD COLUMN content_type TEXT NOT NULL DEFAULT 'explainer'")
+        if "character_id" not in cols:
+            con.execute("ALTER TABLE projects ADD COLUMN character_id TEXT NOT NULL DEFAULT ''")
 
     def close(self):
         con = getattr(self._local, "con", None)
@@ -213,11 +240,12 @@ class Database:
         pid = kw.get("id") or f"p{new_id(7)}"
         ts = now()
         self.execute(
-            f"INSERT INTO projects ({PROJECT_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            f"INSERT INTO projects ({PROJECT_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (pid, kw.get("title") or "Untitled", kw.get("mode") or "A", kw.get("status") or "draft",
              kw.get("language") or "km", kw.get("script") or "", 1 if kw.get("script_locked") else 0,
              kw.get("script_origin") or "", kw.get("topic_hint") or "", kw.get("style_notes") or "",
              float(kw.get("target_duration") or 30), kw.get("voice_profile_id") or "",
+             kw.get("content_type") or "explainer", kw.get("character_id") or "",
              jdump(kw.get("settings") or {}), kw.get("parent_id") or "", kw.get("last_run_id"),
              ts, ts))
         return self.get_project(pid)
@@ -233,8 +261,8 @@ class Database:
 
     def update_project(self, pid, **kw):
         allowed = {"title", "mode", "status", "language", "script", "script_locked", "script_origin",
-                   "topic_hint", "style_notes", "target_duration", "voice_profile_id", "settings_json",
-                   "parent_id", "last_run_id"}
+                   "topic_hint", "style_notes", "target_duration", "voice_profile_id",
+                   "content_type", "character_id", "settings_json", "parent_id", "last_run_id"}
         sets, params = [], []
         for k, v in kw.items():
             if k == "settings":
@@ -276,7 +304,7 @@ class Database:
                  "created_desc": "created_at DESC", "status_asc": "status ASC, updated_at DESC"}.get(
             sort, "updated_at DESC")
         sql = ("SELECT id,title,mode,status,language,target_duration,script_origin,voice_profile_id,"
-               "parent_id,last_run_id,created_at,updated_at,"
+               "content_type,character_id,parent_id,last_run_id,created_at,updated_at,"
                "substr(script,1,240) AS script_excerpt, length(script) AS script_chars,"
                "(SELECT COUNT(*) FROM scenes s WHERE s.project_id=projects.id) AS scene_count,"
                "(SELECT COUNT(*) FROM runs r WHERE r.project_id=projects.id) AS run_count,"
@@ -316,6 +344,11 @@ class Database:
         rows = self.query("SELECT * FROM scenes WHERE project_id=? ORDER BY idx ASC", (pid,))
         for r in rows:
             r["meta"] = jload(r.pop("meta_json", "{}"), {})
+            # normalize a fallback-produced scene that stored its own "meta"
+            # dict as a key of meta_json (double-nesting) — flatten one level
+            inner = r["meta"].get("meta")
+            if isinstance(inner, dict):
+                r["meta"].update(inner)
             r["estimated_duration_sec"] = r.get("est_duration") or 0
         return rows
 
@@ -580,6 +613,68 @@ class Database:
 
     def delete_voice_profile(self, pid):
         self.execute("DELETE FROM voice_profiles WHERE id=?", (pid,))
+        return True
+
+    # ------------------------------------------------------------ characters
+    def create_character(self, **kw):
+        cid = kw.get("id") or f"c{new_id(6)}"
+        self.execute("INSERT INTO characters (id,name,notes,created_at) VALUES (?,?,?,?)",
+                     (cid, kw.get("name") or "Character", kw.get("notes") or "", now()))
+        return self.get_character(cid)
+
+    def get_character(self, cid):
+        row = self.one("SELECT * FROM characters WHERE id=?", (cid,))
+        if not row:
+            return None
+        row["images"] = self.list_character_images(cid)
+        return row
+
+    def list_characters(self):
+        rows = self.query("SELECT * FROM characters ORDER BY created_at DESC")
+        for r in rows:
+            r["images"] = self.list_character_images(r["id"])
+        return rows
+
+    def update_character(self, cid, **kw):
+        allowed = {"name", "notes"}
+        sets, params = [], []
+        for k, v in kw.items():
+            if k in allowed:
+                sets.append(f"{k}=?")
+                params.append(v)
+        if sets:
+            params.append(cid)
+            self.execute(f"UPDATE characters SET {', '.join(sets)} WHERE id=?", params)
+        return self.get_character(cid)
+
+    def delete_character(self, cid):
+        self.execute("DELETE FROM characters WHERE id=?", (cid,))
+        self.execute("DELETE FROM character_images WHERE character_id=?", (cid,))
+        self.execute("UPDATE projects SET character_id='' WHERE character_id=?", (cid,))
+        return True
+
+    def add_character_image(self, character_id, expression_label, image_path, **kw):
+        iid = kw.get("id") or f"i{new_id(6)}"
+        self.execute(
+            "INSERT INTO character_images (id,character_id,expression_label,image_path,created_at) "
+            "VALUES (?,?,?,?,?)",
+            (iid, character_id, (expression_label or "neutral").strip()[:40] or "neutral",
+             image_path, now()))
+        return self.one("SELECT * FROM character_images WHERE id=?", (iid,))
+
+    def list_character_images(self, character_id):
+        rows = self.query(
+            "SELECT * FROM character_images WHERE character_id=? ORDER BY created_at ASC",
+            (character_id,))
+        for r in rows:
+            r["exists"] = bool(r.get("image_path")) and os.path.exists(r["image_path"])
+        return rows
+
+    def get_character_image(self, iid):
+        return self.one("SELECT * FROM character_images WHERE id=?", (iid,))
+
+    def delete_character_image(self, iid):
+        self.execute("DELETE FROM character_images WHERE id=?", (iid,))
         return True
 
     # ------------------------------------------------------------ event log

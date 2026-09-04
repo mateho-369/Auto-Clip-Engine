@@ -73,6 +73,8 @@ DEFAULTS = {
         "sherpa_cli": "",                           # path to sherpa-onnx-offline-tts (optional)
         "language": "km",
         "speed": 1.0,                               # calm narration: <= 1.0 recommended
+        "pace": "natural",                          # slow | natural | brisk (plain-language Pace)
+        "line_gap_sec": 1.0,                        # deterministic silence between lines/scenes
         "sample_rate": 0,                           # 0 = take it from the model
         "speaker_id": 0,
         "crossfade_ms": 30,
@@ -182,6 +184,27 @@ DEFAULTS = {
         "fade_sec": 0.35,
         "transition": "crossfade",                  # crossfade | cut
         "burn_captions": False,
+        "subtitle_style": "clean",                  # clean | bold_yellow | minimal_top | karaoke
+        "title_style": "",                          # '' = no card | centered_fade | bottom_left_minimal | bold_pop
+        "title_text": "",                           # '' = use project title
+    },
+    "talking_head": {                               # NPC mode (SadTalker)
+        "engine": "auto",                           # auto | sadtalker | still
+        "sadtalker_dir": "",                        # SadTalker checkout (infer.py)
+        "python": "",                               # interpreter to use (default: system)
+        "timeout_sec": 1800,
+        "fps": 24,
+    },
+    "illustration": {                               # FLUX.2 klein 4B stills via ComfyUI
+        "engine": "auto",                           # auto | comfyui | pil
+        "workflow": "flux2_klein_t2i_480p",         # workflow name in workflows/ (if present)
+        "comfy_host": "http://127.0.0.1:8188",
+        "steps": 12,
+        "cfg": 3.5,
+        "width": 854,
+        "height": 480,
+        "negative_prompt": "",
+        "timeout_sec": 900,
     },
     # "" = resolve at runtime: STUDIO_DATA_DIR, else <repo>/data/studio.
     # Kept empty on purpose so a custom --data-dir also moves model/voice lookups.
@@ -205,6 +228,21 @@ def _coerce(cfg):
     """Repair values coming from the settings UI (strings, NaN, wild ranges)."""
     c = copy.deepcopy(cfg)
     c["tts"]["speed"] = clamp(c["tts"].get("speed", 1.0), 0.5, 2.0)
+    c["tts"]["pace"] = str(c["tts"].get("pace") or "natural")
+    if c["tts"]["pace"] not in ("slow", "natural", "brisk"):
+        c["tts"]["pace"] = "natural"
+    c["tts"]["line_gap_sec"] = clamp(float(c["tts"].get("line_gap_sec", 1.0)), 0.3, 3.0)
+    try:  # style key sets live with the renderer that consumes them
+        from .media import SUBTITLE_STYLE_KEYS as _sub_keys, TITLE_STYLE_KEYS as _ttl_keys
+    except Exception:
+        _sub_keys, _ttl_keys = ("clean", "bold_yellow", "minimal_top", "karaoke"), \
+                               ("centered_fade", "bottom_left_minimal", "bold_pop")
+    sub_style = str(c.get("assembly", {}).get("subtitle_style") or "clean")
+    if sub_style not in _sub_keys:
+        c["assembly"]["subtitle_style"] = "clean"
+    title_style = str(c.get("assembly", {}).get("title_style") or "")
+    if title_style not in _ttl_keys:
+        c["assembly"]["title_style"] = ""
     c["pipeline"]["scene_target_seconds"] = clamp(c["pipeline"].get("scene_target_seconds"), 2.5, 20.0)
     c["pipeline"]["scene_min_seconds"] = min(c["pipeline"]["scene_min_seconds"],
                                              c["pipeline"]["scene_target_seconds"])
@@ -251,6 +289,8 @@ def _coerce(cfg):
         (("sfx", "engine"), ("auto", "mmaudio", "procedural", "defer", "off")),
         (("tts", "engine"), ("auto", "sherpa", "piper", "kokoro", "placeholder")),
         (("rvc", "engine"), ("auto", "http", "cli", "bypass")),
+        (("talking_head", "engine"), ("auto", "sadtalker", "still")),
+        (("illustration", "engine"), ("auto", "comfyui", "pil")),
     ):
         section, key = engine_key
         if str(c[section][key]) not in allowed:
@@ -263,6 +303,37 @@ def _coerce(cfg):
 
 def default_config():
     return _coerce(copy.deepcopy(DEFAULTS))
+
+
+PACE_PRESETS = {
+    "slow": {"label": "Slow", "speed": 0.9, "pace_calm": 1.4,
+             "desc": "Unhurried, meditative — for reflection pieces."},
+    "natural": {"label": "Natural", "speed": 1.0, "pace_calm": 1.15,
+                "desc": "The house calm pacing (today's default)."},
+    "brisk": {"label": "Brisk", "speed": 1.08, "pace_calm": 0.95,
+              "desc": "Faster, more energetic — for quick tips and lists."},
+}
+
+
+def pace_engine(cfg):
+    """Effective (speed, pace_calm) for the configured Pace setting.
+
+    `tts.pace` is the plain-language switch (slow/natural/brisk); a raw
+    `tts.speed != 1.0` (legacy settings) and a `pipeline.pace_calm` that the
+    user changed still win, so nobody's tuned numbers get overridden.
+    """
+    tts = (cfg or {}).get("tts", {}) or {}
+    pipe = (cfg or {}).get("pipeline", {}) or {}
+    preset = PACE_PRESETS.get(str(tts.get("pace") or "natural"), PACE_PRESETS["natural"])
+    speed = float(tts.get("speed", 1.0) or 1.0)
+    if abs(speed - 1.0) < 1e-3:
+        speed = float(preset["speed"])
+    calm = float(pipe.get("pace_calm", 1.15) or 1.15)
+    if abs(calm - 1.15) < 1e-3:
+        calm = float(preset["pace_calm"])
+    return {"speed": round(speed, 3), "pace_calm": round(calm, 3),
+            "pace": str(tts.get("pace") or "natural"),
+            "label": preset["label"], "desc": preset["desc"]}
 
 
 def normalize_config(cfg):
@@ -420,6 +491,14 @@ def resolve(cfg):
     if hw["cpu_only"] and plan["sfx"]["engine"] == "mmaudio":
         plan["sfx"] = {"engine": "defer", "run": False,
                        "reason": "CPU-only machine — MMAudio queued for Machine A"}
+    pick("talking_head", ["sadtalker", "still"],
+         [("sadtalker", "sadtalker"), ("still", None)], {"sadtalker": "sadtalker"})
+    if hw["cpu_only"] and plan["talking_head"]["engine"] == "sadtalker":
+        plan["talking_head"] = {"engine": "defer", "run": False,
+                                "reason": "CPU-only machine — SadTalker queued for Machine A"}
+    plan["illustration"] = {"engine": str((cfg.get("illustration") or {}).get("engine") or "auto"),
+                            "comfyui": bool(caps.get("comfyui")),
+                            "workflow": (cfg.get("illustration") or {}).get("workflow")}
 
     plan["ollama"] = {"available": bool(caps.get("ollama")),
                       "reason": "online" if caps.get("ollama") else "Ollama offline — deterministic fallbacks"}
@@ -468,6 +547,12 @@ def capabilities(cfg=None):
         out["comfyui"] = ComfyUIClient(cfg["video"]["comfy_host"]).is_online()
     except Exception:
         out["comfyui"] = False
+    # SadTalker (NPC talking head)
+    th = cfg.get("talking_head", {}) or {}
+    th_dir = (th.get("sadtalker_dir") or "").strip() or os.environ.get("SADTALKER_DIR", "")
+    out["sadtalker"] = bool(th_dir) and (os.path.exists(os.path.join(th_dir, "infer.py"))
+                                         or os.path.exists(
+                                             os.path.join(th_dir, "scripts", "inference.py")))
     gpus = nvidia_gpus()
     out["nvidia"] = bool(gpus)
     out["vram_free_mb"] = sum(g.get("memory_free_mb", 0) for g in gpus)

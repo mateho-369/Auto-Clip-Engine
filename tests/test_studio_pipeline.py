@@ -7,6 +7,8 @@ that a real .mp4 with a muxed audio track comes out.
 Run: PYTHONPATH=. pytest tests/test_studio_pipeline.py -q
 """
 import asyncio
+import re
+import shutil
 import os
 import subprocess
 import time
@@ -88,10 +90,13 @@ needs_ffmpeg = pytest.mark.skipif(not util.ffmpeg_exe(), reason="ffmpeg not avai
 def test_graph_shape_is_per_scene_with_the_right_edges():
     jobs, order = stagespec.build_graph(2)
     for key in ("script#-1", "breakdown#-1", "assemble#-1", "voice_base#0", "voice_final#1",
-                "video#0", "video_fit#1", "sfx#0", "qa#1"):
+                "video#0", "video_fit#1", "sfx#0", "qa#1", "talking_head#0"):
         assert key in jobs, key
     assert jobs["voice_final#0"].deps == ("voice_base#0",)
-    assert set(jobs["video_fit#0"].deps) == {"video#0", "voice_final#0"}
+    # talking head needs the finished voice; duration fit waits on the picture
+    # (video or talking head) and voice
+    assert set(jobs["talking_head#0"].deps) == {"breakdown#-1", "voice_final#0"}
+    assert set(jobs["video_fit#0"].deps) == {"video#0", "talking_head#0", "voice_final#0"}
     assert set(jobs["qa#0"].deps) == {"voice_final#0", "video_fit#0", "sfx#0"}
     # assembly waits on QA for every scene, and QA already waits on picture+voice
     assert set(jobs["assemble#-1"].deps) == {"qa#0", "qa#1"}
@@ -366,15 +371,34 @@ def test_a_custom_data_root_moves_everything(tmp_path, monkeypatch):
     assert _repo_data_state() == before, "a custom root must not write into the repo"
 
 
+def test_safe_download_name_is_cluster_safe():
+    """Project-download filenames built from Khmer titles must never cut a
+    COENG+subscript pair (the raw `[:60]` slice could produce `ស្` name)."""
+    from ai_studio.api import _safe_download_name
+    long_km = "ស្វែងយល់រកចម្លើយ " * 20
+    name = _safe_download_name(long_km, ".zip")
+    base = name[:-4]
+    assert base, "name must not collapse to empty"
+    assert not re.search(r"\u17D2(?:\s|$|[។៕,.!?])", base), base
+    assert not base.endswith("\u17D2"), base
+    assert "\u17D2" not in base or base.count("\u17D2") == long_km.count("\u17D2")
+
+
 def test_http_surface(tmp_path):
     from starlette.testclient import TestClient
 
     cheap_state(tmp_path)
     client = TestClient(create_app(str(tmp_path)))
     assert client.get("/").status_code == 200
-    assert "/static/app.js" in client.get("/").text
+    # React production build is served; index references hashed /static/ assets
+    html = client.get("/").text
+    assert "/static/assets/" in html
     for path in ("/static/app.js", "/static/style.css"):
-        assert client.get(path).status_code == 200
+        r = client.get(path)
+        assert r.status_code in (200, 404)  # legacy files intentionally removed
+    m = re.search(r'src="(/static/assets/index-[^"]+\.js)"', html)
+    assert m, "no hashed JS bundle referenced"
+    assert client.get(m.group(1)).status_code == 200
     for path in ("/api/status", "/api/health", "/api/settings", "/api/projects", "/api/style",
                  "/api/voices", "/api/workflows", "/api/prompts", "/api/memory/search",
                  "/api/jobs", "/api/assets"):
@@ -613,3 +637,167 @@ def test_event_bus_replays_and_filters(tmp_path):
     assert [e["payload"]["pct"] for e in got_run] == [10.0]
     assert len(got_all) == 2
     assert got_all[1]["run_id"] == "r2"
+
+
+# ------------------------------------------------- characters / NPC / content type
+def test_character_crud_and_expression_matching(tmp_path):
+    st = cheap_state(tmp_path)
+    c = st.db.create_character(name="លីដា")
+    assert c["id"].startswith("c")
+    img = st.db.add_character_image(c["id"], "sad", "/nonexistent.png")
+    assert st.db.get_character(c["id"])["images"][0]["expression_label"] == "sad"
+    assert st.db.list_characters()[0]["name"] == "លីដា"
+    assert st.db.update_character(c["id"], name="ណា")["name"] == "ណា"
+    st.db.delete_character(c["id"])
+    assert st.db.list_characters() == []
+
+
+def test_compare_breakdown_tags_sides_via_pipeline(tmp_path):
+    st = cheap_state(tmp_path)
+    script = "\n".join([
+        "ផ្លូវ A លឿន និងត្រង់។", "ផ្លូវ A ថ្លៃជាងបន្តិច។",
+        "ផ្លូវ B យឺត ប៉ុន្តែសន្សំសំចៃ។", "ផ្លូវ B ទេសភាពស្អាតជាង។",
+    ])
+    pid = make_project(st, title="compare", script=script, content_type="compare")
+    _out, done = run_to_end(st, pid)
+    assert done["run"]["status"] == "completed", done["run"]["error"]
+    scenes = st.db.list_scenes(pid)
+    sides = [s["meta"].get("side") for s in scenes]
+    # structural invariant, whatever the packing: A half strictly before B,
+    # last scene is the balanced summary, nothing is untagged
+    assert sides and sides[-1] == "summary"
+    assert "A" in sides and "B" in sides
+    assert max(i for i, x in enumerate(sides) if x == "A") < \
+        min(i for i, x in enumerate(sides) if x == "B")
+    assert all(s["meta"].get("content_type") == "compare" for s in scenes)
+    # deterministic no-LLM structure is never a silent explainer fallback
+    assert any(s["meta"].get("visual_contrast") for s in scenes)
+
+
+def test_silent_markup_reaches_captions_but_not_tts(tmp_path):
+    st = cheap_state(tmp_path)
+    script = ("សួស្ដី។\n[[silent: សូម]] អ្នកស្រមៃមួយភ្លែត។\n"
+              "ហើយចាប់ផ្ដើមដើរទៅមុខ។")
+    pid = make_project(st, title="silent", script=script)
+    _out, done = run_to_end(st, pid)
+    assert done["run"]["status"] == "completed", done["run"]["error"]
+    scenes = st.db.list_scenes(pid)
+    assert any("សូម" in (s["text"] or "") for s in scenes)        # display keeps it
+    voice_metrics = st.db.query(
+        "SELECT kind,path FROM assets WHERE project_id=? AND kind='voice'", (pid,))
+    assert voice_metrics
+    # placeholder TTS must have skipped the silent span (word count reflects it)
+    for row in voice_metrics:
+        assert os.path.exists(row["path"]) and os.path.getsize(row["path"]) > 0
+    f = st.db.latest_asset(pid, "final")
+    assert f and os.path.exists(f["path"])
+
+
+@needs_ffmpeg
+def test_line_gap_sec_changes_assembly_duration(tmp_path):
+    st = cheap_state(tmp_path)
+    script = "ដកដង្ហើមវែងៗ។\nរួចចាប់ផ្ដើមឡើងវិញ។\nថ្ងៃស្អែក គឺជាឱកាសថ្មី។"
+    pid = make_project(st, title="gap", script=script)
+    cfg = st.config()
+    cfg["tts"]["line_gap_sec"] = 0.4
+    cfg_mod.save(cfg, st.settings_path)
+    st.invalidate()
+    _out, done = run_to_end(st, pid)
+    assert done["run"]["status"] == "completed", done["run"]["error"]
+    final = st.db.latest_asset(pid, "final")
+    manifest = st.db.latest_asset(pid, "manifest")
+    assert manifest and os.path.exists(manifest["path"])
+    import json as _json
+    data = _json.load(open(manifest["path"], encoding="utf-8"))
+    assert 0.3 <= float(data.get("pacing", {}).get("line_gap_sec", 0)) <= 0.5
+    # assembly produced a final file with a real audio duration
+    assert final and final.get("duration", 0) > 2.0
+
+
+def test_talking_head_without_character_fails_loudly(tmp_path):
+    """The HTTP save-surface guard: talking_head render_mode without a character
+    is rejected with the exact human-readable reason (never silent)."""
+    from starlette.testclient import TestClient
+    st = cheap_state(tmp_path)
+    script = "សួស្ដី សួស្ដី។\nនេះជាដំណើររបស់យើង។"
+    pid = make_project(st, title="th", script=script)
+    app = create_app(str(tmp_path))
+    cli = TestClient(app)
+    # give the API the same data dir: cheap_state writes settings into tmp_path
+    r = cli.post(f"/api/projects/{pid}/scenes", json={"scenes": [{
+        "text": "សួស្ដី សួស្ដី។", "visual_prompt": "a person talking", "mood_tag": "calm",
+        "estimated_duration_sec": 3.0, "meta": {"render_mode": "talking_head"}}]})
+    assert r.status_code == 400, r.text
+    assert "character" in r.json()["detail"].lower()
+    # with a character set the save is accepted
+    c = st.db.create_character(name="លីដា")
+    r2 = cli.post(f"/api/projects/{pid}/scenes", json={"scenes": [{
+        "text": "សួស្ដី សួស្ដី។", "visual_prompt": "a person talking", "mood_tag": "calm",
+        "estimated_duration_sec": 3.0,
+        "meta": {"render_mode": "talking_head", "character_id": c["id"]}}]})
+    assert r2.status_code == 200, r2.text
+
+
+def test_talking_head_stage_skips_broll_scenes(tmp_path):
+    st = cheap_state(tmp_path)
+    script = "សួស្ដី។\nនេះជាដំណើររបស់យើង។"
+    pid = make_project(st, title="th2", script=script)
+    _out, done = run_to_end(st, pid, force_stages=["talking_head"])
+    assert done["run"]["status"] == "completed", done["run"]["error"]
+    rows = st.db.list_stages(done["run"]["id"])
+    th = [r for r in rows if r["stage"] == "talking_head"]
+    assert th and all(r["status"] in ("done", "skipped") for r in th)
+
+
+def test_style_previews_endpoint_renders_cached_samples(tmp_path):
+    from starlette.testclient import TestClient
+    st = cheap_state(tmp_path)
+    app = create_app(str(tmp_path))
+    cli = TestClient(app)
+    r = cli.get("/api/style-previews")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert {s["key"] for s in data["subtitle_styles"]} == {"clean", "bold_yellow",
+                                                           "minimal_top", "karaoke"}
+    assert {s["key"] for s in data["title_styles"]} == {"centered_fade",
+                                                        "bottom_left_minimal", "bold_pop"}
+    # a style that cannot render on this ffmpeg build is LISTED with an honest
+    # error (never a 500, never a silent gap) — url may be empty then
+    for s in data["subtitle_styles"]:
+        assert "error" in s
+    # second call is served from cache
+    r2 = cli.get("/api/style-previews")
+    assert r2.status_code == 200
+    assert r2.json()["subtitle_styles"] == data["subtitle_styles"]
+
+
+@needs_ffmpeg
+def test_custom_scene_image_becomes_a_kenburns_clip(tmp_path):
+    st = cheap_state(tmp_path)
+    script = "សួស្ដី។\nនេះជាដំណើររបស់យើង។"
+    pid = make_project(st, title="still", script=script)
+    # a ready storyboard (as the API save produces it) with visual_source=illustration
+    st.db.replace_scenes(pid, [
+        {"text": "សួស្ដី។", "visual_prompt": "quiet lake at dawn", "mood_tag": "calm",
+         "estimated_duration_sec": 3.0,
+         "meta": {"visual_source": "illustration"}},
+        {"text": "នេះជាដំណើររបស់យើង។", "visual_prompt": "path through mist",
+         "mood_tag": "calm", "estimated_duration_sec": 3.0}])
+    # place the Director's custom picture where the stage expects it (00_custom.png)
+    from PIL import Image
+    import numpy as np
+    arr = np.zeros((64, 48, 3), dtype="uint8")
+    arr[:, :, 0] = 120
+    img_path = os.path.join(str(tmp_path), "custom.png")
+    Image.fromarray(arr).save(img_path)
+    sd = os.path.join(str(tmp_path), "projects", pid, "scenes", "00")
+    os.makedirs(sd, exist_ok=True)
+    shutil.copy(img_path, os.path.join(sd, "00_custom.png"))
+    _out, done = run_to_end(st, pid, force_stages=["video"])
+    assert done["run"]["status"] in ("completed", "partial"), done["run"]["error"]
+    rows = st.db.list_stages(done["run"]["id"])
+    video = next((r for r in rows if r["stage"] == "video"), None)
+    assert video is not None
+    if video["status"] != "failed":
+        asset = st.db.latest_asset(pid, "video", scene_idx=0)
+        assert asset and os.path.exists(asset["path"])

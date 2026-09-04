@@ -66,9 +66,11 @@ class RunContext:
         names = {"script": "01_script.txt", "scenes": "02_scenes.json"}
         if kind in names:
             return os.path.join(self.project_dir(), names[kind])
-        stem = {"voice": "03a_voice", "voice_final": "03b_voice_final", "video": "04_video",
+        stem = {"voice": "03a_voice", "voice_final": "03b_voice_final",
+                "talking_head": "03c_talking_head", "video": "04_video",
                 "video_fit": "04b_video_fit", "ambient": "05_ambient", "qa": "06_qa",
-                "thumb": "00_thumb", "waveform": "03a_voice.waveform"}.get(kind, kind)
+                "thumb": "00_thumb", "illustration": "00_illustration",
+                "custom": "00_custom", "waveform": "03a_voice.waveform"}.get(kind, kind)
         return os.path.join(self.scene_dir(idx), f"{stem}{ext}")
 
     def relurl(self, path):

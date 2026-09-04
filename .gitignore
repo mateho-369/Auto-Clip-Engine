@@ -35,3 +35,6 @@ data/studio/
 data/studio.*/
 models/
 .venv-studio/
+
+# React frontend deps (regenerate with npm ci; the built app lives in static/)
+ai_studio/frontend/node_modules/

@@ -118,14 +118,12 @@ def create_app(data_root=None, enable_demo_seed=False):
     async def home():
         path = os.path.join(STATIC_DIR, "index.html")
         if not os.path.exists(path):
-            return HTMLResponse(f"<h1>{STUDIO_NAME}</h1><p>UI missing — API at /api/status</p>")
+            return HTMLResponse(f"<h1>{STUDIO_NAME}</h1><p>UI missing — run "
+                                f"<code>cd ai_studio/frontend && npm ci && npm run build</code> "
+                                f"or use the dev server. API at /api/status</p>")
         with open(path, "r", encoding="utf-8") as f:
             html = f.read()
-        # mtime-versioned assets: an edited app.js/style.css can never be served stale
-        v = int(max(os.path.getmtime(os.path.join(STATIC_DIR, "app.js")),
-                    os.path.getmtime(os.path.join(STATIC_DIR, "style.css"))))
-        html = (html.replace('href="/static/style.css"', f'href="/static/style.css?v={v}"')
-                    .replace('src="/static/app.js"', f'src="/static/app.js?v={v}"'))
+        # hashed Vite assets are cache-safe; index itself is never cached
         return HTMLResponse(html, headers={"Cache-Control": "no-cache, must-revalidate"})
 
     @app.get("/files/{relpath:path}")

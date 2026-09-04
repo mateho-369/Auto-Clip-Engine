@@ -70,6 +70,7 @@ async def stage_script(ctx, _idx):
     llm = ctx.llm()
     cfg = dict(ctx.cfg)
     cfg["target_duration"] = float(project.get("target_duration") or 30)
+    cfg["content_type"] = project.get("content_type") or "explainer"
     res = await generate(llm, project.get("topic_hint") or "", cfg,
                          style_notes=project.get("style_notes") or "",
                          regenerate_note=project.get("regenerate_note") or "")
@@ -106,6 +107,125 @@ def _sha(text):
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
 
 
+# --------------------------------------------------- scene meta / characters
+def scene_meta(scene):
+    """The per-scene production dict (visual_source/render_mode/side/…)."""
+    return scene.get("meta") or {}
+
+
+def _content_type(ctx):
+    from .. import content as content_mod
+    return content_mod.normalize(ctx.project.get("content_type") or "explainer")
+
+
+def _default_visual_source(ctx):
+    from .. import content as content_mod
+    return content_mod.spec(_content_type(ctx)).default_visual_source
+
+
+def _character_id(scene, ctx):
+    """Scene-level character override, else the project's character."""
+    m = scene_meta(scene)
+    return m.get("character_id") or ctx.project.get("character_id") or ""
+
+
+def _scene_render_mode(scene, ctx):
+    m = scene_meta(scene)
+    return m.get("render_mode") or ctx.project.get("settings", {}).get("render_mode") or "broll"
+
+
+def _scene_visual_source(scene, ctx):
+    m = scene_meta(scene)
+    vs = m.get("visual_source")
+    if vs:
+        return vs
+    # content-type defaults (always overridable per scene, but a sensible start):
+    # compare → character_demo if a character exists, else illustration per side;
+    # word_nuance / choose options → illustration; choose takeaway stays video.
+    ct = _content_type(ctx)
+    if ct == "compare":
+        return "character_demo" if _character_id(scene, ctx) else "illustration"
+    if ct == "word_nuance":
+        return "illustration"
+    if ct == "choose":
+        return "illustration" if m.get("side") != "takeaway" else "generated_video"
+    if ct == "myth_vs_fact" and m.get("side") == "myth":
+        return "illustration"
+    return "generated_video"
+
+
+def _scene_character_image(ctx, scene):
+    """Matched expression image for a character-driven scene, else None.
+
+    Rule: the scene's mood_tag is matched to the nearest expression label of
+    the project's / scene's character (exact label → content.MOOD_TO_EXPRESSION
+    synonym → calm → neutral — see ai_studio.content). Returns None when no
+    character is set or the character has no images.
+    """
+    cid = _character_id(scene, ctx)
+    if not cid:
+        return None, None
+    from .. import content as content_mod
+
+    char = ctx.db.get_character(cid)
+    if not char or not (char.get("images") or []):
+        return None, char
+    labels = [i.get("expression_label") for i in char["images"]]
+    label = content_mod.expression_for_mood(scene.get("mood_tag") or "", labels)
+    for img in char["images"]:
+        if (img.get("expression_label") or "").lower() == label and img.get("exists"):
+            return img["image_path"], char
+    # label wasn't uploaded: first existing image still lets I2V run
+    for img in char["images"]:
+        if img.get("exists"):
+            return img["image_path"], char
+    return None, char
+
+
+def _actionable_scene(scene, ctx):
+    """Apply content-type scene structure (meta.side etc.) to one scene dict."""
+    m = dict(scene_meta(scene))
+    ct = _content_type(ctx)
+    # compare/word_nuance/choose get their side from the LLM when present, or
+    # (offline) from the scene's position — assigned by `_tag_sides` (needs the
+    # whole list). Other types may already carry one from a previous run.
+    m.setdefault("content_type", ct)
+    m.setdefault("render_mode", _scene_render_mode(scene, ctx))
+    m.setdefault("visual_source", _scene_visual_source(scene, ctx))
+    scene = dict(scene)
+    scene["meta"] = m
+    return scene
+
+
+def _tag_sides(scenes, ctx):
+    """Content-type structural tagging (deterministic when the LLM is offline)."""
+    from .. import content as content_mod
+
+    ct = _content_type(ctx)
+    n = len(scenes)
+    for i, s in enumerate(scenes):
+        m = dict(scene_meta(s))
+        if m.get("side"):
+            continue
+        if ct == "compare":
+            half = max(1, n // 2)
+            m["side"] = "A" if i < half else ("B" if i < 2 * half else "summary")
+            if n >= 3 and i == n - 1 and m["side"] == "B":
+                m["side"] = "summary"
+        elif ct == "word_nuance":
+            m["side"] = "meaning-1" if i == 0 else ("meaning-2" if i == n - 1 else "contrast")
+        elif ct == "myth_vs_fact":
+            m["side"] = "myth" if i == 0 else ("fact" if i == 1 else "why-it-matters")
+        elif ct == "choose":
+            m["side"] = f"option-{i + 1}" if i < n - 1 else "takeaway"
+        else:
+            m["side"] = ""
+        s = dict(s)
+        s["meta"] = m
+        scenes[i] = s
+    return scenes
+
+
 # ------------------------------------------------------------------ 1 · breakdown
 async def stage_breakdown(ctx, _idx):
     project = ctx.project
@@ -115,14 +235,28 @@ async def stage_breakdown(ctx, _idx):
     board = ctx.db.list_scenes(ctx.project_id) or None
     from ..agents.controller import break_down
 
-    scenes, meta = await break_down(ctx.llm(), script, ctx.cfg, plan_scenes=board)
+    scenes, meta = await break_down(ctx.llm(), script, ctx.cfg, plan_scenes=board,
+                                    content_type=ctx.project.get("content_type") or "explainer",
+                                    character_id=ctx.project.get("character_id") or "")
     if not scenes:
         return {"ok": False, "error": "segmentation produced no scenes"}
     limit = int(ctx.cfg["pipeline"].get("max_scenes", 12))
     scenes = scenes[:limit]
+    scenes = _tag_sides(scenes, ctx)
     for i, s in enumerate(scenes):
         s["idx"] = i
         s.setdefault("sfx_prompt", style_mod.ambience_for(s.get("mood_tag"), s.get("visual_prompt")))
+        s = _actionable_scene(s, ctx)
+        # side-tagged compare visuals get a contrast note (A/B distinction)
+        m = scene_meta(s)
+        if m.get("side") in ("A", "B") and _content_type(ctx) == "compare":
+            base = (s.get("visual_prompt") or "").strip()
+            side_word = "warm golden" if m["side"] == "A" else "cool blue"
+            if "contrast" not in base.lower():
+                s["visual_prompt"] = khmer.clip_clusters(
+                    base + f", {m['side']}-side visual treatment, distinct {side_word} "
+                           f"colour grade for the {m['side']} side", 600)
+        scenes[i] = s
     ctx.db.replace_scenes(ctx.project_id, scenes)
     ctx.reload_scenes()
     path = write_json(ctx.asset_path("scenes", -1, ".json"),
@@ -262,6 +396,68 @@ async def stage_video(ctx, idx):
                           f"you run the GPU catch-up"]}
     from ..engines import video as video_engine
 
+    visual_source = _scene_visual_source(scene, ctx)
+    render_mode = _scene_render_mode(scene, ctx)
+    character_image, character = _scene_character_image(ctx, scene)
+
+    if visual_source == "character_demo" and not _character_id(scene, ctx):
+        return {"ok": False, "error": "visual_source 'character_demo' needs a character_id — "
+                                      "the scene is an NPC gesture shot without a character."}
+
+    # talking-head scenes are produced by stage 3c (they need the final voice);
+    # this stage skips them with a terminal-ok status so the DAG still settles.
+    if render_mode == "talking_head":
+        if not _character_id(scene, ctx):
+            return {"ok": False, "error": "render_mode 'talking_head' needs a character_id — "
+                                          "set a character on the project or the scene."}
+        return {"ok": True, "status": "skipped", "engine": "talking-head-owns-this-scene",
+                "progress": 100.0,
+                "message": "scene is a talking-head shot — rendered by stage 3c",
+                "notes": [f"scene {idx + 1}: picture comes from SadTalker (stage 3c)"]}
+
+    # still-image source: Director's upload wins, then a generated illustration.
+    still = None
+    custom = None
+    try:
+        from ..engines.illustration import find_custom_image
+        custom = find_custom_image(ctx.scene_dir(idx))
+    except Exception:
+        custom = None
+    if visual_source == "illustration":
+        if custom:
+            still = custom
+        else:
+            from ..engines import illustration as ill_engine
+            still_path = ctx.asset_path("thumb", idx, ".png")
+            try:
+                res_ill = await asyncio.to_thread(
+                    ill_engine.generate_still,
+                    (scene.get("visual_prompt") or "") + " " + _content_type(ctx),
+                    still_path, ctx.cfg, progress=ctx.progress_cb("video", idx, 2, 14, "illustration · "),
+                    seed=idx + _run_seed(ctx))
+                if res_ill.get("ok"):
+                    still = res_ill["path"]
+            except Exception:
+                still = None
+        if not still:
+            note = "illustration requested but no still could be made — falling back to generated video"
+        else:
+            out = ctx.asset_path("video", idx, ".mp4")
+            est = float(scene.get("estimated_duration_sec") or 4.0)
+            aud = float(scene.get("audio_duration") or 0)
+            target = max(1.0, aud or est)
+            res = await asyncio.to_thread(video_engine.render_scene_clip, scene, out, ctx.cfg,
+                                          ctx.plan, target,
+                                          ctx.progress_cb("video", idx, 3, 96, "kenburns · "),
+                                          idx + _run_seed(ctx), None, still,
+                                          bool(character))
+            if res.get("ok"):
+                return _video_result(ctx, idx, out, res, engine, target)
+            return {"ok": False, "error": f"illustration clip failed: {str(res.get('reason'))[:200]}",
+                    "engine": engine}
+
+    # character I2V: matched expression image as the start frame (existing path)
+    reference = character_image or _project_reference_image(ctx)
     out = ctx.asset_path("video", idx, ".mp4")
     est = float(scene.get("estimated_duration_sec") or 4.0)
     aud = float(scene.get("audio_duration") or 0)
@@ -270,7 +466,11 @@ async def stage_video(ctx, idx):
         ctx.cfg["video"].get("seed") or 0)
     res = await asyncio.to_thread(video_engine.render_scene_clip, scene, out, ctx.cfg, ctx.plan,
                                   target, ctx.progress_cb("video", idx, 3, 96, f"{engine} · "),
-                                  seed, _reference_image(ctx))
+                                  seed, reference, None, bool(character))
+    return _video_result(ctx, idx, out, res, engine, target)
+
+
+def _video_result(ctx, idx, out, res, engine, target):
     if not res.get("ok"):
         return {"ok": False, "error": f"video render failed: {str(res.get('reason'))[:240]}",
                 "engine": engine}
@@ -296,8 +496,8 @@ async def stage_video(ctx, idx):
                                                       if res.get("fallback_reason") else [])}
 
 
-def _reference_image(ctx):
-    """A character/key frame to seed Wan2.2 TI2V, when the project has one."""
+def _project_reference_image(ctx):
+    """A start frame in <project>/reference/, when the Director placed one."""
     d = os.path.join(ctx.project_dir(), "reference")
     if not os.path.isdir(d):
         return None
@@ -307,10 +507,60 @@ def _reference_image(ctx):
     return None
 
 
+# --------------------------------------------------------- 3c · talking head
+async def stage_talking_head(ctx, idx):
+    scene = ctx.db.get_scene(ctx.project_id, idx)
+    if not scene:
+        return {"ok": False, "error": f"scene {idx} missing"}
+    render_mode = _scene_render_mode(scene, ctx)
+    if render_mode != "talking_head":
+        return {"ok": True, "status": "skipped", "engine": "not-required",
+                "progress": 100.0, "message": "scene is not a talking-head shot"}
+    cid = _character_id(scene, ctx)
+    if not cid:
+        return {"ok": False, "error": "render_mode 'talking_head' needs a character_id set"}
+    image, char = _scene_character_image(ctx, scene)
+    if not image:
+        return {"ok": False, "error": f"character '{cid}' has no uploaded expression image"}
+    voice = ctx.latest_asset("voice_final", scene_idx=idx) or ctx.latest_asset("voice", scene_idx=idx)
+    if not voice:
+        return {"ok": False, "error": "talking head needs the finished voice first"}
+    plan_th = ctx.plan.get("talking_head") or {}
+    if plan_th.get("engine") in ("defer", "off"):
+        return {"ok": True, "status": "deferred", "engine": plan_th.get("engine"),
+                "progress": 0.0, "message": plan_th.get("reason") or
+                "talking head queued for the GPU machine"}
+    from ..engines import talking_head as th_engine
+
+    out = ctx.asset_path("talking_head", idx, ".mp4")
+    res = await asyncio.to_thread(
+        th_engine.render, image, voice["path"], out, ctx.cfg,
+        ctx.progress_cb("talking_head", idx, 3, 95, "talking head · "))
+    if not res.get("ok"):
+        return {"ok": False, "error": f"talking head failed: {str(res.get('reason'))[:240]}",
+                "engine": "talking_head"}
+    ctx.log_engine_prompt("talking_head", idx, res.get("engine"),
+                          model=res.get("engine", "sadtalker"),
+                          system=f"character={ (char or {}).get('name') } expression-image={os.path.basename(image)}",
+                          user=(scene.get("text") or "")[:600],
+                          response=f"{res.get('duration', 0):.2f}s lip-synced clip",
+                          latency_ms=0)
+    meta = {k: v for k, v in res.items() if k not in ("ok", "path")}
+    meta["character"] = (char or {}).get("name", "")
+    meta["expression_image"] = os.path.basename(image)
+    meta["render_mode"] = "talking_head"
+    return {"ok": True, "engine": res.get("engine") or "talking_head", "progress": 100.0,
+            "message": f"{res.get('duration', 0):.2f}s talking head · {res.get('engine')}",
+            "assets": [{"kind": "talking_head", "path": out, "scene_idx": idx,
+                        "duration": res.get("duration", 0), "meta": meta}],
+            "notes": [res.get("note")] if res.get("note") else []}
+
+
 # ----------------------------------------------------------------- 4b · duration match
 async def stage_video_fit(ctx, idx):
     scene = ctx.db.get_scene(ctx.project_id, idx)
-    video = ctx.latest_asset("video", scene_idx=idx)
+    video = ctx.latest_asset("video", scene_idx=idx) or \
+        ctx.latest_asset("talking_head", scene_idx=idx)
     voice = ctx.latest_asset("voice_final", scene_idx=idx) or ctx.latest_asset("voice", scene_idx=idx)
     plan_video = ctx.plan.get("video") or {}
     if not video:
@@ -365,7 +615,9 @@ async def stage_sfx(ctx, idx):
     if engine in ("defer", "off"):
         return {"ok": True, "status": "deferred", "engine": engine, "progress": 0.0,
                 "message": plan_sfx.get("reason") or "MMAudio ambience queued for the GPU machine"}
-    video = ctx.latest_asset("video", scene_idx=idx) or ctx.latest_asset("video_fit", scene_idx=idx)
+    video = ctx.latest_asset("video", scene_idx=idx) or \
+        ctx.latest_asset("talking_head", scene_idx=idx) or \
+        ctx.latest_asset("video_fit", scene_idx=idx)
     fit = ctx.latest_asset("video_fit", scene_idx=idx)
     voice = ctx.latest_asset("voice_final", scene_idx=idx) or ctx.latest_asset("voice", scene_idx=idx)
     target = max(0.8, float((fit or video or {}).get("duration") or 0) or
@@ -409,7 +661,7 @@ async def stage_qa(ctx, idx):
              "ambient_layers": "", "peak": 0.0}
     assets = {}
     slots = {}
-    for kind in ("voice", "voice_final", "video", "video_fit", "ambient"):
+    for kind in ("voice", "voice_final", "video", "talking_head", "video_fit", "ambient"):
         a = ctx.latest_asset(kind, scene_idx=idx)
         if a:
             slots[kind] = {"path": a["path"], "duration": float(a.get("duration") or 0),
@@ -430,7 +682,7 @@ async def stage_qa(ctx, idx):
     assets["voice_engine_ok"] = facts["voice_engine_ok"]
     assets["_head_silence"] = facts["head_silence"]
     assets["_tail_silence"] = facts["tail_silence"]
-    vid = slots.get("video_fit") or slots.get("video")
+    vid = slots.get("video_fit") or slots.get("video") or slots.get("talking_head")
     if vid:
         facts["video_duration"] = float(vid.get("duration") or 0)
         facts["video_engine"] = str(vid.get("engine") or "").replace("+chunked", "")
@@ -477,7 +729,7 @@ async def stage_assemble(ctx, _idx):
     if not scenes:
         return {"ok": False, "error": "no scenes to assemble"}
     stage_assets = {}
-    for kind in ("voice", "voice_final", "video", "video_fit", "ambient", "qa"):
+    for kind in ("voice", "voice_final", "video", "talking_head", "video_fit", "ambient", "qa"):
         stage_assets[kind] = {}
         for s in scenes:
             a = ctx.latest_asset(kind, scene_idx=s["idx"])
@@ -525,6 +777,7 @@ STAGE_IMPL = {
     "breakdown": stage_breakdown,
     "voice_base": stage_voice_base,
     "voice_final": stage_voice_final,
+    "talking_head": stage_talking_head,
     "video": stage_video,
     "video_fit": stage_video_fit,
     "sfx": stage_sfx,

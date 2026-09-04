@@ -23,29 +23,49 @@ def assemble(project, scenes, stage_assets, cfg, out_dir, run_id="", progress=No
     sfx_cfg = cfg.get("sfx", {})
     width, height = int(v.get("width", 480)), int(v.get("height", 854))
     fps = int(asm.get("fps", 24))
+    # deterministic gap between lines/scenes (tts.line_gap_sec, default 1.0s)
+    gap = max(0.0, float((cfg.get("tts", {}) or {}).get("line_gap_sec", 1.0)))
     ensure_dir(out_dir)
     work = ensure_dir(os.path.join(out_dir, f".assembly_{run_id or 'x'}"))
 
     seg_videos, voice_tracks, amb_tracks, starts, notes = [], [], [], [], []
-    cursor = 0.0
+
+    # optional rendered title card (assembly.title_style) — a silent intro clip
+    title_dur = 0.0
+    title_style = str(asm.get("title_style") or "")
+    if title_style:
+        try:
+            card = os.path.join(work, "title_card.mp4")
+            title_text = (asm.get("title_text") or project.get("title") or "")[:120]
+            media.render_title_card(card, title_text, title_style, width, height,
+                                    min(24, fps), duration=2.6)
+            title_dur = media_duration(card, 0.0) or 2.6
+            seg_videos.append(card)
+            notes.append(f"title card '{title_style}' rendered at the start")
+        except Exception as e:
+            notes.append(f"title card skipped: {str(e)[:140]}")
+    cursor = title_dur
     total = len(scenes) or 1
     for i, scene in enumerate(scenes):
         idx = int(scene.get("idx", i))
         if progress:
             progress(100.0 * i / total, f"scene {idx + 1}/{total}: normalising picture")
         video = (stage_assets.get("video_fit", {}).get(idx) or
-                 stage_assets.get("video", {}).get(idx))
+                 stage_assets.get("video", {}).get(idx) or
+                 stage_assets.get("talking_head", {}).get(idx))
         voice = (stage_assets.get("voice_final", {}).get(idx) or
                  stage_assets.get("voice", {}).get(idx))
         ambient = stage_assets.get("ambient", {}).get(idx)
         v_dur = media_duration(voice["path"], 0.0) if voice and voice.get("path") else 0.0
         dur = max(0.8, v_dur or float(scene.get("estimated_duration_sec") or 4.0))
+        tail = gap if i < total - 1 else 0.0
 
         clip = None
         if video and video.get("path") and os.path.exists(video["path"]):
             clip = os.path.join(work, f"seg{i:02d}.mp4")
             try:
-                media.normalize_clip(video["path"], clip, width, height, fps, duration=dur)
+                media.normalize_clip(video["path"], clip, width, height, fps, duration=dur,
+                                     tail_pad=tail)
             except Exception as e:
                 notes.append(f"scene {idx + 1}: could not normalise clip ({str(e)[:110]}); using previz")
                 clip = None
@@ -61,6 +81,8 @@ def assemble(project, scenes, stage_assets, cfg, out_dir, run_id="", progress=No
                 clip = _black_slate(work, i, dur, width, height, fps)
         if clip is None:
             clip = _black_slate(work, i, dur, width, height, fps)
+        if tail > 0.02 and media_duration(clip, dur) < dur + tail - 0.05:
+            clip = _pad_tail(work, clip, i, tail)
         real_dur = media_duration(clip, dur)
         seg_videos.append(clip)
         if voice and voice.get("path") and os.path.exists(voice["path"]):
@@ -112,19 +134,35 @@ def assemble(project, scenes, stage_assets, cfg, out_dir, run_id="", progress=No
     if not os.path.exists(final) or os.path.getsize(final) < 1024:
         raise RuntimeError("final encode failed (no readable MP4 produced)")
 
+    sub_style = str(asm.get("subtitle_style") or "clean")
     out = {"path": final, "duration": media_duration(final, total_dur),
            "size_bytes": os.path.getsize(final), "width": width, "height": height,
            "fps": fps, "scenes": len(scenes), "notes": notes,
-           "audio_peak_info": info}
+           "audio_peak_info": info, "line_gap_sec": gap, "title_style": title_style,
+           "subtitle_style": sub_style}
 
     if asm.get("emit_srt", True):
         srt = os.path.join(out_dir, os.path.splitext(os.path.basename(final))[0] + ".srt")
-        media.write_srt([s.get("text", "") for s in scenes], starts, srt)
+        # display_text: [[silent: …]] words stay on screen even though not spoken
+        media.write_srt([khmer.display_text(s.get("text", "")) for s in scenes], starts, srt)
         out["srt"] = srt
     if asm.get("burn_captions"):
         try:
             burned = final.replace(".mp4", ".captions.mp4")
-            media.burn_subtitles(final, out["srt"], burned)
+            if sub_style == "karaoke" and out.get("srt"):
+                ass = os.path.join(out_dir, os.path.splitext(os.path.basename(final))[0] + ".ass")
+                k_end = [starts[i + 1] if i + 1 < len(starts) else total_dur
+                         for i in range(len(scenes))]
+                windows = [(starts[i], max(starts[i] + 0.6, k_end[i]),
+                            khmer.display_text(s.get("text", "")))
+                           for i, s in enumerate(scenes)]
+                media.write_karaoke_ass(windows, ass, width=width, height=height)
+                media.burn_ass(final, ass, burned, style="karaoke")
+                out["ass"] = ass
+                notes.append(f"captions burned with karaoke style (proportional word timing)")
+            else:
+                media.burn_subtitles(final, out["srt"], burned, style=sub_style)
+                notes.append(f"captions burned with '{sub_style}' style")
             out["with_captions"] = burned
         except Exception as e:
             notes.append(f"caption burn-in skipped: {str(e)[:140]}")
@@ -137,6 +175,18 @@ def assemble(project, scenes, stage_assets, cfg, out_dir, run_id="", progress=No
         out["manifest"] = write_json(os.path.join(out_dir, os.path.splitext(
             os.path.basename(final))[0] + ".manifest.json"), manifest)
     return out
+
+
+def _pad_tail(work, src, i, tail):
+    """Freeze the clip's last frame for `tail` seconds (the line gap pause)."""
+    dst = os.path.join(work, f"seg{i:02d}.pad.mp4")
+    from ..util import run_ffmpeg
+    from .. import media as media_mod
+
+    vf = f"tpad=stop_mode=clone:stop_duration={float(tail):.3f},format=yuv420p"
+    run_ffmpeg(["-i", src, "-vf", vf, "-c:v", "libx264", "-preset", "veryfast",
+                "-crf", "22", "-pix_fmt", "yuv420p", "-an", dst], timeout=1800)
+    return dst
 
 
 def _black_slate(work, i, dur, width, height, fps):
@@ -161,14 +211,19 @@ def _manifest(project, scenes, stage_assets, starts, out, cfg, run_id, notes):
 
     return {
         "studio": "khmer-ai-content-studio",
-        "version": 1,
+        "version": 2,
         "generated_at": out.get("generated_at"),
         "run_id": run_id,
         "project": {"id": project.get("id"), "title": project.get("title"), "mode": project.get("mode"),
                     "script_origin": project.get("script_origin"), "language": project.get("language"),
                     "voice_profile_id": project.get("voice_profile_id"),
+                    "content_type": project.get("content_type") or "explainer",
+                    "character_id": project.get("character_id") or "",
                     "style_notes": project.get("style_notes"),
                     "target_duration": project.get("target_duration")},
+        "pacing": {"line_gap_sec": out.get("line_gap_sec"),
+                   "title_style": out.get("title_style"),
+                   "subtitle_style": out.get("subtitle_style")},
         "video": {"path": os.path.basename(out.get("path", "")), "duration": out.get("duration"),
                   "width": out.get("width"), "height": out.get("height"), "fps": out.get("fps"),
                   "size_bytes": out.get("size_bytes")},

@@ -162,9 +162,11 @@ def _sherpa_tts(cfg, model_onnx, tokens, model_dir):
 def synthesize(text, out_wav, cfg, engine="auto", progress=None, seed=0):
     """Speak `text` into `out_wav`. Returns a result dict (never raises)."""
     cfg_t = cfg.get("tts", {})
-    text = khmer.strip_emoji_and_marks(text or "")
+    # [[silent: …]] spans are display-only: the words are never spoken
+    text = khmer.spoken_text(text or "")
+    text = khmer.strip_emoji_and_marks(text)
     if not text:
-        return {"ok": False, "reason": "empty text", "engine": "none"}
+        return {"ok": False, "reason": "empty text (all silent markup)", "engine": "none"}
     ensure_dir(os.path.dirname(out_wav) or ".")
     want = engine if engine in ("sherpa", "piper", "kokoro", "placeholder") else "auto"
     chain = (["sherpa", "piper", "kokoro", "placeholder"] if want == "auto" else [want, "placeholder"])
@@ -397,9 +399,10 @@ def _placeholder(text, out_wav, cfg, attempts, seed=0):
                 k = int(min(m * 0.12, sr * 0.045))
                 voiced[:k] += rng.normal(0, 0.16, k).astype(np.float32) * np.linspace(1, 0, k)
             out[s0:s1] += voiced
-            if i < nsyl - 1 and float(rng.random()) < 0.14:   # phrase-final pause
-                gap = int(sr * float(rng.uniform(0.09, 0.2)))
-                out[s1 - min(gap, m):s1] *= np.linspace(1, 0.15, min(gap, m), dtype=np.float32)
+            # NOTE: no random phrase-final pause here. Pacing between lines is
+            # now DETERMINISTIC: `tts.line_gap_sec` inserts real silence
+            # between scenes during assembly (configurable 0.3-3.0s). The
+            # per-syllable envelope above keeps natural word flow within a line.
         out = np.clip(out, -1, 1) * 0.6
         breath = rng.normal(0, 0.012, n).astype(np.float32)
         write_wav(out_wav, out + breath, sr, normalize_to=0.62)
