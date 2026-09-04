@@ -313,7 +313,10 @@ async def api_download_project(project_id: str, kind: str = "all"):
 
 def _safe_download_name(title, ext):
     base = khmer.strip_emoji_and_marks(title or "project")
-    base = "".join(c for c in base if c.isalnum() or c in " -_.")[:60].strip() or "project"
+    base = "".join(c for c in base if c.isalnum() or c in " -_.")
+    if khmer.is_khmer(base):
+        base = khmer.truncate_clusters(base, 60, suffix="")   # never cut a coeng pair
+    base = base[:60].strip() or "project"
     return base + ext
 
 

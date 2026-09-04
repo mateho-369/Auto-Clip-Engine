@@ -224,6 +224,30 @@ function SceneBoard({ proj, scenes, rows, assets, sel, onSel, onChanged, act, bu
   };
   const stageFor = (idx: number, stage: string) => rows.find((r) => r.stage === stage && r.scene_idx === idx);
 
+  // content-type structure grouping: compare → A / B / summary; word_nuance → meaning-1 / meaning-2 / contrast
+  const groupKey = (s: Scene): string => {
+    const side = s.meta?.side || "";
+    if (proj.content_type === "compare") return side === "summary" ? "summary" : side ? "side " + side : "";
+    if (proj.content_type === "word_nuance") return side || "";
+    return "";
+  };
+  const groupLabel = (k: string) => {
+    if (!k) return "";
+    if (proj.content_type === "compare") return k === "summary" ? "⚖ summary" : k === "side A" ? "⚖ side A" : "⚖ side B";
+    if (proj.content_type === "word_nuance") return "🔤 " + k;
+    return k;
+  };
+  const grouped: { label: string; items: number[] }[] = [];
+  draft.forEach((s, i) => {
+    const k = groupKey(s);
+    const last = grouped[grouped.length - 1];
+    if (!k || (last && last.label === groupLabel(k))) {
+      if (last) last.items.push(i); else grouped.push({ label: "", items: [i] });
+    } else {
+      grouped.push({ label: groupLabel(k), items: [i] });
+    }
+  });
+
   return (
     <Panel title={`Scene board (${scenes.length})`}
       right={<button className="btn tiny primary" onClick={save} disabled={busy === "board"}>save board</button>}>
@@ -231,7 +255,10 @@ function SceneBoard({ proj, scenes, rows, assets, sel, onSel, onChanged, act, bu
         <thead><tr><th style={{ width: 30 }}>#</th><th>text</th><th style={{ width: 140 }}>visual</th>
           <th style={{width: 110}}>mood</th><th style={{ width: 80 }}>⏱</th><th style={{ width: 120 }}>production</th></tr></thead>
         <tbody>
-          {draft.map((s, i) => {
+          {grouped.map((g, gi) => (
+            <React.Fragment key={gi}>
+              {g.label && <tr className="group-head"><td colSpan={6}>{g.label}</td></tr>}
+              {g.items.map((s, i) => {
             const done = stageFor(i, "video_fit")?.status === "done";
             return (
               <tr key={i} onClick={() => onSel(i)} style={{ cursor: "pointer", background: sel === i ? "#242a35" : undefined }}>
@@ -271,7 +298,9 @@ function SceneBoard({ proj, scenes, rows, assets, sel, onSel, onChanged, act, bu
                 </td>
               </tr>
             );
-          })}
+              })}
+            </React.Fragment>
+          ))}
         </tbody>
       </table>
     </Panel>

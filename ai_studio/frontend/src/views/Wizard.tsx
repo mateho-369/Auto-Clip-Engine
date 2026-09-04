@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { api, Character, ContentTypeMeta, Project, StylePreview, VoiceProfile } from "../api";
 import { useToast, errText } from "../main";
 import { Modal, Badge } from "../ui";
@@ -23,6 +23,19 @@ export function Wizard({ onClose, onCreated }: { onClose: () => void; onCreated:
   const [pace, setPace] = useState("natural");
   const [lineGap, setLineGap] = useState(1.15);
   const [advanced, setAdvanced] = useState(false);
+  const scriptRef = useRef<HTMLTextAreaElement | null>(null);
+  const markSilent = () => {
+    const ta = scriptRef.current;
+    if (!ta) return;
+    const a = ta.selectionStart, b = ta.selectionEnd;
+    if (b <= a) { toast("select some text first, then mark it as not spoken", "warn"); return; }
+    const sel = script.slice(a, b);
+    if (sel.includes("[[")) { toast("selection already contains silent markup — pick plain text", "warn"); return; }
+    const next = script.slice(0, a) + "[[silent: " + sel.trim() + "]]" + script.slice(b);
+    setScript(next);
+    toast("marked as not spoken — shown in captions, never read aloud", "ok");
+    requestAnimationFrame(() => { ta.focus(); ta.setSelectionRange(a, a + next.length); });
+  };
   const [burn, setBurn] = useState(true);
   const [subStyle, setSubStyle] = useState("clean");
   const [titleStyle, setTitleStyle] = useState("");
@@ -180,8 +193,15 @@ export function Wizard({ onClose, onCreated }: { onClose: () => void; onCreated:
             {mode === "A" ? (
               <label className="fld">
                 <span>Finished Khmer script (one sentence per line — line = scene)</span>
-                <textarea rows={7} value={script} onChange={(e) => setScript(e.target.value)}
+                <div className="row" style={{ gap: 6, marginBottom: 4 }}>
+                  <button type="button" className="btn tiny" onClick={markSilent}
+                    title="wrap the selected text in [[silent: …]] — it is shown in captions but never spoken">
+                    ✕ mark selection as not spoken</button>
+                  <span className="hint">use [[silent: text]] anywhere — kept on screen, never sent to TTS</span>
+                </div>
+                <textarea ref={scriptRef} rows={7} value={script} onChange={(e) => setScript(e.target.value)}
                   placeholder={"ជីវិតមនុស្ស មិនមែនជាប្រណាំងទេ។\nវាគឺជាដំណើរ ដែលយើងត្រូវរៀនដើរម្ដងមួយជំហាន។"} />
+                <SilentPreview text={script} />
               </label>
             ) : (
               <label className="fld">
@@ -220,5 +240,20 @@ export function Wizard({ onClose, onCreated }: { onClose: () => void; onCreated:
         </div>
       </div>
     </Modal>
+  );
+}
+
+function SilentPreview({ text }: { text: string }) {
+  const parts = text.split(/(\[\[silent:[^\]]*\]\])/g);
+  return (
+    <div className="silent-preview" aria-label="script preview: struck-through text is not spoken">
+      <span className="hint">preview — </span>
+      {parts.map((p, i) => {
+        const m = /^\[\[silent:\s*([^\]]*)\]\]$/.exec(p);
+        return m
+          ? <span key={i} className="silent-mark" title="not spoken — displayed only">{m[1]}</span>
+          : <span key={i}>{p}</span>;
+      })}
+    </div>
   );
 }

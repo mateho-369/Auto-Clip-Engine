@@ -371,6 +371,19 @@ def test_a_custom_data_root_moves_everything(tmp_path, monkeypatch):
     assert _repo_data_state() == before, "a custom root must not write into the repo"
 
 
+def test_safe_download_name_is_cluster_safe():
+    """Project-download filenames built from Khmer titles must never cut a
+    COENG+subscript pair (the raw `[:60]` slice could produce `ស្` name)."""
+    from ai_studio.api import _safe_download_name
+    long_km = "ស្វែងយល់រកចម្លើយ " * 20
+    name = _safe_download_name(long_km, ".zip")
+    base = name[:-4]
+    assert base, "name must not collapse to empty"
+    assert not re.search(r"\u17D2(?:\s|$|[។៕,.!?])", base), base
+    assert not base.endswith("\u17D2"), base
+    assert "\u17D2" not in base or base.count("\u17D2") == long_km.count("\u17D2")
+
+
 def test_http_surface(tmp_path):
     from starlette.testclient import TestClient
 

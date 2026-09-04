@@ -504,6 +504,12 @@ UI must end with `npm run build` before delivery,* because FastAPI serves the bu
   duration + voice + style notes → Create.
 * **Style Gallery** — real pre-rendered 3-second samples (`/api/style-previews`,
   cached on disk) for every subtitle style *and* title style — never blind dropdown names.
+* **Director script editor** — live preview under the textarea: `[[silent: …]]` spans
+  shown greyed + struck-through (displayed, never spoken), plus a
+  **“mark selection as not spoken”** helper that wraps your selection in the markup.
+* **Scene-board groups** — `compare` scenes are grouped under **side A / side B / summary**
+  header rows and `word_nuance` under **meaning-1 / meaning-2 / contrast**, matching the
+  structural tags the backend assigns (every other type stays a flat board).
 * **AI Team** — per-role model + temperature + enable, options fetched from the backend,
   saved instantly with a toast on every change.
 * **Old-UI features preserved 1:1** — run control (pause/resume/cancel/continue), per-stage
@@ -573,7 +579,7 @@ tests in `tests/test_studio_pipeline.py`.
 
 ```bash
 PYTHONPATH=. pytest tests/test_studio_text.py tests/test_studio_pipeline.py -q   # 66 passed
-python -m pytest -q    # via `python -m` from the repo root: 142 passed (incl. legacy ai_creator suite)
+python -m pytest -q    # via `python -m` from the repo root: 143 passed (incl. legacy ai_creator suite)
 ```
 
 No GPU and no network needed: Khmer text handling (cluster-safe segmentation, danda,
@@ -601,6 +607,9 @@ the output JSON/audio/asset files:
 | GPU catch-up | deferred `video`/`sfx`/`video_fit` run → catchup starts a run, `completed`, 0 failed | ✅ |
 | regenerate-script | Mode B `POST …/regenerate-script` returns fresh `ai:template` draft | ✅ |
 | waveform | `GET /api/assets/{id}/waveform?bins=64` → 65 peaks + duration | ✅ |
+| content types ×7 | each type end-to-end via HTTP: `completed`, 0 failed, all scenes carry `content_type`, structure tags (A/B/summary, meaning-1/2, myth/fact, option-N/takeaway, hypothetical, ≤2 scenes) | ✅ 21/21 |
+| coeng boundary | long subscript-heavy script → title + scene texts + SRT contain **zero** lone `្` (no `U+17D2` before space/EOL/punct) | ✅ |
+| silent estimate | same script with `[[silent: នេះជា]]` → estimated speech **shorter** than spoken version (3.34s vs 3.74s) | ✅ |
 | silent-gap | `[[silent:]]` not spoken (manifest/pacing), present in SRT + scene text, `line_gap_sec=0.6` honoured, final asset exists | ✅ |
 | characters | CRUD + 4 expression uploads + mood→expression map | ✅ |
 | compare (no char) | A→B→summary ordering, per-side `illustration` | ✅ |
@@ -611,7 +620,7 @@ the output JSON/audio/asset files:
 | subtitle styles ×4 | each `clean`/`bold_yellow`/`minimal_top`/`karaoke` run completes, captions burned + manifest key | ✅ |
 | title styles ×3 | each preset run completes, manifest key + title lead-in added | ✅ |
 | sad pose | mood `sad` → pose phrase + in-place tail in the real video prompt | ✅ |
-| **Total** | | **55/55 checks passed** |
+| **Total** | | **83/83 checks passed** |
 
 ---
 

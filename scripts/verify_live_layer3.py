@@ -280,6 +280,91 @@ def main():
     ok("sad mood pose phrase in actual prompt", "head lowered" in pm or "slumped" in pm or
        "shoulders" in pm or "sad" in pm.lower(), pm[:220])
 
+    # 11. content-type matrix — every type end-to-end via HTTP
+    ct_payload = c.get(f"{API}/content-types").json()
+    ct_keys = [t.get("key") or t.get("id") or t.get("name") for t in (ct_payload.get("types") or [])]
+    ct_keys = [k for k in ct_keys if k] or \
+        ["explainer", "what_if", "compare", "choose", "word_nuance", "myth_vs_fact", "quick_tip"]
+    ct_scripts = {
+        "explainer": "សួស្ដី។\nថ្ងៃនេះយើងរៀនអំពីការថែទាំសុខភាព។\nយើងត្រូវគេងឲ្យបានគ្រប់គ្រាន់។\nហើយផឹកទឹកឲ្យបានច្រើន។\nសូមអរគុណ។",
+        "what_if": "ចុះបើយើងអាចហោះហើរបាន?\nយើងនឹងឃើញទេសភាពពីលើមេឃ។\nប៉ុន្តែយើងត្រូវប្រុងប្រយ័ត្ន។\nចុះបើគ្រប់គ្នាហោះហើរ?",
+        "compare": "ផ្លូវ A លឿន និងត្រង់។\nផ្លូវ A ថ្លៃជាងបន្តិច។\nផ្លូវ B យឺត ប៉ុន្តែសន្សំសំចៃ។\nផ្លូវ B ទេសភាពស្អាត។\nសរុប៖ អាស្រ័យលើអ្វីដែលអ្នកត្រូវការ។",
+        "choose": "ជម្រើសទីមួយ គឺទិញកាបូបថ្មី។\nជម្រើសទីពីរ គឺជួសជុលកាបូបចាស់។\nជម្រើសទីបី គឺរង់ចាំបន្តិចទៀត។\nដូច្នេះ អ្នកអាចជ្រើសរើសតាមចំណូលចិត្ត។",
+        "word_nuance": "ន័យទីមួយ គឺការដើរតាមផ្លូវ។\nន័យទីពីរ គឺការដើរឆ្ពោះទៅរកគោលដៅ។\nពេលប្រៀបធៀប យើងឃើញភាពខុសគ្នា។",
+        "myth_vs_fact": "មនុស្សជាច្រើនជឿថា ត្រជាក់បណ្ដាលឲ្យផ្ដាសាយ។\nប៉ុន្តែតាមពិត វីរុសគឺជាមូលហេតុ។\nដូច្នេះ ការដឹងច្បាស់ជួយយើងការពារខ្លួន។",
+        "quick_tip": "គន្លឹះមួយគឺ ដាក់ទឹកឲ្យបានគ្រប់គ្រាន់។\nចាំថា ទឹកគឺសំខាន់ណាស់។",
+    }
+    ct_expect = {
+        "compare": lambda sides: {"A", "B", "summary"} <= set(sides) and sides[-1] == "summary",
+        "word_nuance": lambda sides: {"meaning-1", "meaning-2"} <= set(sides),
+        "myth_vs_fact": lambda sides: {"myth", "fact"} <= set(sides),
+        "choose": lambda sides: len(sides) >= 3 and sides[-1] == "takeaway" and sides[0].startswith("option-"),
+        "what_if": lambda sides: bool(sides) and sides[0] == "hypothetical",
+        "quick_tip": lambda sides: True,
+        "explainer": lambda sides: True,
+    }
+    for ct in ct_keys:
+        title = f"ct-{ct}"
+        script = ct_scripts.get(ct, ct_scripts["explainer"])
+        pp = new_project(c, title=title, content_type=ct, script=script,
+                         settings={"tts": {"line_gap_sec": 0.4}})
+        st, failed = run_full(c, pp["id"])
+        sc = c.get(f"{API}/projects/{pp['id']}/scenes").json()["scenes"]
+        sides = [x["meta"].get("side", "") for x in sc]
+        cts = {x["meta"].get("content_type") for x in sc} if sc else set()
+        ok(f"content-type '{ct}' completed", st["status"] == "completed" and not failed, st["status"])
+        ok(f"content-type '{ct}' all scenes carry ct", cts <= {ct}, str(cts))
+        if ct == "quick_tip":
+            ok(f"content-type '{ct}' ≤2 scenes", 0 < len(sc) <= 2, len(sc))
+        else:
+            ok(f"content-type '{ct}' structure tags", ct_expect[ct](sides), str(sides))
+        if ct == "compare":
+            ok(f"content-type '{ct}' A before B before summary",
+               sides.index("A") < sides.index("B") < sides.index("summary"), str(sides))
+
+    # 12. long subscript-heavy script → zero lone coeng at any boundary
+    SUB_SCRIPT = ("ស្វែងយល់រកចម្លើយ ស្រស់ស្អាត និងប្រណាំងពេលថ្ងៃ។\n"
+                  "ចម្រៀងខ្មែរដ៏ផ្អែម ដើរជាមួយក្ដីសង្ឃឹម។\n"
+                  "កម្មវិធីនេះជួយឲ្យយល់ច្បាស់ពីអ្វីដែលសំខាន់។\n"
+                  "ស្រ្ដីម្នាក់សម្លឹងមើលផ្កាក្នុងសួន។\n"
+                  "នាងស្វែងរកឱកាស ហើយមិនដែលបោះបង់។\n"
+                  "នេះគឺជាការចាប់ផ្ដើមដ៏ល្អសម្រាប់ថ្ងៃស្អែក។")
+    pp = new_project(c, title="coeng-boundary", content_type="explainer", script=SUB_SCRIPT,
+                     settings={"assembly": {"burn_captions": True, "subtitle_style": "clean"},
+                               "tts": {"line_gap_sec": 0.4}})
+    st, failed = run_full(c, pp["id"])
+    proj = c.get(f"{API}/projects").json()
+    proj_row = next(x for x in proj["projects"] if x["id"] == pp["id"])
+    title = proj_row.get("title") or ""
+    bad = lambda t: "្" in t and bool(__import__("re").search(r"្(?:\s|$)|្[។៕,.!?]", t))
+    ok("coeng run completed", st["status"] == "completed" and not failed)
+    ok("coeng title has no broken cluster", not bad(title), title)
+    sc = c.get(f"{API}/projects/{pp['id']}/scenes").json()["scenes"]
+    scene_texts = "\n".join(x["text"] for x in sc)
+    ok("coeng scene texts have no lone coeng", not bad(scene_texts))
+    srt = next((a for a in c.get(f"{API}/assets", params={"project_id": pp["id"]}).json()["assets"]
+                if a["kind"] == "srt"), None)
+    srt_txt = open(srt["path"], encoding="utf-8").read() if srt else ""
+    ok("coeng SRT has no lone coeng", bool(srt_txt) and not bad(srt_txt))
+    asstexts = []
+    for a in c.get(f"{API}/assets", params={"project_id": pp["id"]}).json()["assets"]:
+        if a["kind"] == "ass":
+            try: asstexts.append(open(a["path"], encoding="utf-8").read())
+            except Exception: pass
+    ok("coeng ASS/other captions clean", all(not bad(t) for t in asstexts), f"{len(asstexts)} ass files")
+
+    # 13. [[silent:]] shortens estimated speech vs the spoken version, live
+    def est_total(script_text, title):
+        q = new_project(c, title=title, script=script_text)
+        stq, fq = run_full(c, q["id"])
+        assert stq["status"] == "completed" and not fq
+        sq = c.get(f"{API}/projects/{q['id']}/scenes").json()["scenes"]
+        return sum(float(x.get("estimated_duration_sec") or 0) for x in sq)
+    spoken = est_total("សួស្ដី។\nនេះជាដំណើររបស់យើងដ៏វែងឆ្ងាយ។", "est-spoken")
+    sil = est_total("សួស្ដី។\n[[silent: នេះជា]] ដំណើររបស់យើងដ៏វែងឆ្ងាយ។", "est-silent")
+    ok("[[silent:]] shortens estimated speech (silent < spoken)",
+       sil < spoken, f"{sil:.2f}s vs {spoken:.2f}s")
+
     # summary
     print("\n== SUMMARY ==")
     good = sum(1 for _n, cnd, _d in RESULTS if cnd)

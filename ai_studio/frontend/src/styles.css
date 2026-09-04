@@ -57,6 +57,9 @@ button { cursor: pointer; }
 .dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
 .dot.poll { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
 .wave { background: var(--bg2); border-radius: 4px; }
+.silent-preview { margin-top: 6px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg2); font-size: 13px; line-height: 1.7; }
+.silent-mark { color: var(--red); text-decoration: line-through; opacity: .75; }
+.group-head td { padding: 3px 8px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--yellow); background: #1d222b; border-bottom: 1px solid var(--border); }
 .btn.warn { background: #4a3a10; border-color: #7a5a10; color: #ffe9b0; }
 .btn.warn:hover { background: #5c4914; }
 .main { overflow: auto; background: var(--bg); }
