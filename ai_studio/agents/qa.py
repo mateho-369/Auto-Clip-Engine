@@ -14,10 +14,11 @@ draft), unless `pipeline.require_qa_pass` is on.
 """
 import json
 
+from .. import content as content_mod
 from .. import khmer, style as style_mod
 from ..llm import qa_validator
 
-SYSTEM = (
+_SYSTEM_BASE = (
     "You are the QA REVIEWER of a local Khmer video studio.\n"
     + style_mod.STYLE_GUIDELINE
     + "\nReview ONE finished scene and report defects. Look for: wording that is harsh, "
@@ -30,8 +31,24 @@ SYSTEM = (
 )
 
 
+def qa_system(content_type="explainer"):
+    ct = content_mod.normalize(content_type)
+    return _SYSTEM_BASE + (
+        "\nCONTENT TYPE CHECK:\n" + content_mod.instruction_block(ct)
+        + "\nDoes this scene still serve that type? (e.g. compare scenes must sit on one "
+        "side A or B; myth-vs-fact must state the myth plainly before the fact; quick-tip "
+        "must be imperative and short.)"
+    )
+
+
+SYSTEM = qa_system("explainer")
+
+
 async def review_scene(llm, scene, asset_facts, cfg, scene_idx, run_id="", project_id=""):
     from ..pipeline.fallbacks import deterministic_qa
+
+    content_type = content_mod.normalize((scene.get("meta") or {}).get("content_type")
+                                         or "explainer")
 
     mechanical = deterministic_qa(scene, asset_facts, cfg)
     out = {
@@ -49,17 +66,19 @@ async def review_scene(llm, scene, asset_facts, cfg, scene_idx, run_id="", proje
 
     payload = {
         "scene_index": int(scene_idx),
-        "text": (scene.get("text") or "")[:1200],
+        "text": khmer.clip_clusters(scene.get("text") or "", 1200),
         "language": "km",
-        "visual_prompt": (scene.get("visual_prompt") or "")[:400],
+        "content_type": content_type,
+        "visual_prompt": khmer.clip_clusters(scene.get("visual_prompt") or "", 400),
         "mood_tag": scene.get("mood_tag") or "",
+        "side": (scene.get("meta") or {}).get("side", ""),
         "voice_duration_sec": asset_facts.get("voice", {}).get("duration") if isinstance(
             asset_facts.get("voice"), dict) else asset_facts.get("voice_duration"),
         "video_duration_sec": asset_facts.get("video_duration"),
         "ambience": asset_facts.get("ambient_layers") or asset_facts.get("ambient_engine"),
         "mechanical_flags": [i.get("issue") for i in mechanical["issues"]][:6],
     }
-    data, meta = await llm.ask_json("qa", "qa", SYSTEM,
+    data, meta = await llm.ask_json("qa", "qa", qa_system(content_type),
                                     "Review this scene. JSON only.\n"
                                     + json.dumps(payload, ensure_ascii=False, indent=1),
                                     scene_idx=int(scene_idx))

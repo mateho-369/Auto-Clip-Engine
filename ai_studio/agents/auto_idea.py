@@ -12,13 +12,20 @@ Khmer script in the house voice. Two hard rules:
 """
 import json
 
+from .. import content as content_mod
 from .. import khmer, style as style_mod
 from ..llm import script_validator
 
-SYSTEM = (
+_SYSTEM_BASE = (
     "You are the AUTO-IDEA writer of a local Khmer short-video studio.\n"
     + style_mod.STYLE_GUIDELINE
     + "\nWrite a COMPLETE narration script in Khmer for one short video. Requirements:\n"
+)
+
+SYSTEM = _SYSTEM_BASE + (
+    "CONTENT TYPE: EXPLAINER.\n"
+    + content_mod.instruction_block("explainer")
+    + "\n"
     "- 5 to 8 lines, one sentence per line, separated by newlines (the editor splits "
     "scenes on these lines);\n"
     "- total spoken length close to the requested runtime (a calm Khmer line of 60-90 "
@@ -30,27 +37,50 @@ SYSTEM = (
 )
 
 
+def _auto_idea_system(content_type="explainer"):
+    ct = content_mod.normalize(content_type)
+    return _SYSTEM_BASE + (
+        f"CONTENT TYPE: {spec_label(ct)}.\n"
+        + content_mod.instruction_block(ct)
+        + "\n"
+        "- 5 to 8 lines, one sentence per line, separated by newlines (the editor splits "
+        "scenes on these lines);\n"
+        "- total spoken length close to the requested runtime (a calm Khmer line of 60-90 "
+        "characters takes about 6 seconds);\n"
+        "- the words must be Khmer script (អក្សរខ្មែរ). English only inside a technical term if "
+        "unavoidable;\n"
+        "- no headings, no bullet marks, no scene numbers, no camera notes, no emoji;\n"
+        "Respond ONLY with valid JSON: {\"title\": string, \"logline\": string, \"script\": string}"
+    )
+
+
+def spec_label(ct):
+    return content_mod.spec(ct).label
+
+
 async def generate(llm, topic_hint, cfg, style_notes="", regenerate_note=""):
     """Returns {title, logline, script, engine, notes[]} — always usable."""
     notes = []
-    topic = khmer.strip_emoji_and_marks(topic_hint or "")[:300]
+    content_type = content_mod.normalize(cfg.get("content_type") or "explainer")
+    topic = khmer.clip_clusters(khmer.strip_emoji_and_marks(topic_hint or ""), 300)
     if not topic:
         topic = "ការមិនបោះបង់ចិត្ត ទោះថ្ងៃលំបាក"
         notes.append("no topic given — the controller picked 'not giving up'")
     if llm is None or not llm.enabled("auto_idea"):
-        return _fallback(topic, cfg, "auto_idea role off / no LLM")
+        return _fallback(topic, cfg, "auto_idea role off / no LLM", content_type)
 
     payload = {
         "topic_hint": topic,
+        "content_type": content_type,
         "target_seconds": int(cfg.get("target_duration") or 30),
-        "extra_style_notes": (style_notes or "")[:600],
-        "director_note": (regenerate_note or "")[:400],
+        "extra_style_notes": khmer.clip_clusters(style_notes or "", 600),
+        "director_note": khmer.clip_clusters(regenerate_note or "", 400),
     }
     user = ("Write the script now. JSON only.\n" + json.dumps(payload, ensure_ascii=False, indent=1))
-    data, meta = await llm.ask("auto_idea", "script", SYSTEM, user,
+    data, meta = await llm.ask("auto_idea", "script", _auto_idea_system(content_type), user,
                               validate=script_validator(min_chars=30))
     if not data:
-        return _fallback(topic, cfg, f"LLM unavailable ({meta.get('reason', 'no answer')})")
+        return _fallback(topic, cfg, f"LLM unavailable ({meta.get('reason', 'no answer')})", content_type)
     # normalize_block alone keeps whatever markdown the model added (it's the
     # same function Mode A uses for the Director's own pasted script, where
     # preserving exact formatting is the whole point — wrong tool here: this
@@ -78,7 +108,7 @@ async def generate(llm, topic_hint, cfg, style_notes="", regenerate_note=""):
             notes.append(f"retry still {int(_khmer_ratio(cand) * 100)}% Khmer — kept best effort")
             script = script or cand
     if not script:
-        return _fallback(topic, cfg, "empty script from model")
+        return _fallback(topic, cfg, "empty script from model", content_type)
     est = khmer.estimate_speech_seconds(script, calm=cfg.get("pipeline", {}).get("pace_calm", 1.15))
     want = float(cfg.get("target_duration") or 30)
     if want and est < want * 0.6:
@@ -100,15 +130,18 @@ async def generate(llm, topic_hint, cfg, style_notes="", regenerate_note=""):
     }
 
 
-def _fallback(topic, cfg, why):
+def _fallback(topic, cfg, why, content_type="explainer"):
     from ..pipeline.fallbacks import template_script   # local: keeps module graph light
-    out = template_script(topic, cfg)
-    out["notes"] = [f"auto-writer fallback: {why} — deterministic template script used"]
+    from ..config import pace_engine
+
+    out = template_script(topic, cfg, content_type=content_type)
+    out["notes"] = [f"auto-writer fallback: {why} — deterministic template script used "
+                    f"({content_type})"]
     out["engine"] = "template"
     out["origin"] = "ai:template"
     out["khmer_ratio"] = round(_khmer_ratio(out["script"]), 3)
     out["estimated_seconds"] = khmer.estimate_speech_seconds(
-        out["script"], calm=cfg.get("pipeline", {}).get("pace_calm", 1.15))
+        out["script"], calm=pace_engine(cfg).get("pace_calm", 1.15))
     return out
 
 

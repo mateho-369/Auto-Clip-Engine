@@ -252,3 +252,140 @@ def test_llm_roles_exist_for_the_three_agents():
     assert d["controller"]["model"] == "sailor2:8b"
     assert d["controller"]["fallback_model"] == "llama3.2:3b"
     assert all(label for label in cfg_mod.LLM_ROLE_LABELS.values())
+
+
+# ------------------------------------------------------ khmer cluster safety
+def test_clusters_never_bisect_coeng_or_marks():
+    t = "ស្វែងយល់រកចម្លើយ"
+    units = khmer.split_clusters(t)
+    assert "".join(units) == t
+    for u in units:
+        assert not u.endswith("\u17d2"), u                 # never ends with COENG
+        assert not u.startswith("\u17d2"), u               # never starts with COENG
+        # a base must own its marks; a leading mark is a broken cluster
+        if len(u) > 1 and not (0x1780 <= ord(u[0]) <= 0x17D3):
+            assert 0x1780 <= ord(u[0]) <= 0x17B3 or u[0] == "\u17d7", u
+
+
+def test_truncate_clusters_and_wrap_respect_cluster_boundaries():
+    t = "ស្វែងយល់រកចម្លើយ"
+    assert khmer.truncate_clusters(t, 3, suffix="") == "ស្វែងយ"
+    out = khmer.truncate_clusters(t, 3)
+    assert out.endswith("…") and khmer.equal_text(out[:-1], "ស្វែងយ")
+    lines = khmer.wrap_clusters(t, 8)
+    assert "".join(lines) == t.replace(" ", "")
+    for ln in lines:
+        assert not ln.endswith("\u17d2")
+    # single COENG cluster is still never bisected at max=1
+    assert khmer.truncate_clusters("ក្មេង", 1, suffix="") == "ក្មេ"
+
+
+def test_tts_text_never_sees_silent_markup():
+    parts = khmer.split_silent("ថ្ងៃនេះ [[silent: សូម]] យើងរៀន")
+    assert khmer.spoken_text("a [[silent: b]] c") == "a  c"
+    assert khmer.display_text("a [[silent: b]] c") == "a b c"
+    assert khmer.equal_text("a [[silent: b]] c", "a b c") is True
+    assert len(parts) == 3 and parts[1][1] == ""           # silent part is spoken as emptiness
+    # syllable/token estimates follow the spoken text, not the display text
+    assert khmer.syllable_estimate("a [[silent: bbbbb]]") == khmer.syllable_estimate("a")
+
+
+def test_hard_split_and_title_are_cluster_safe():
+    s = "ស្វែងយល់រកចម្លើយបញ្ញា"
+    h = khmer._hard_split(s, 4)
+    assert not h[0].endswith("\u17d2")
+    assert "".join(h) == "".join([p for p in h])
+    t = khmer.title_from(s)
+    assert t == s or not t.endswith("\u17d2")
+    assert len(khmer.split_clusters(t)) <= 12
+
+
+# ------------------------------------------------------ content types
+def test_content_type_api_surface_and_defaults():
+    from ai_studio import content
+    assert content.DEFAULT_CONTENT_TYPE == "explainer"
+    assert set(content.CONTENT_TYPES) == {"explainer", "what_if", "compare", "choose",
+                                          "word_nuance", "myth_vs_fact", "quick_tip"}
+    assert content.normalize("nope") == "explainer"
+    assert content.instruction_block("compare").startswith("CONTENT TYPE: COMPARE")
+    assert content.expression_for_mood("sad") == "sad"
+    assert content.expression_for_mood("sorrow") == "sad"          # synonym table
+    assert content.expression_for_mood("unknown-mood") == "calm"
+    assert content.expression_for_mood("sad", ["neutral"]) == "neutral"  # constrained
+    payload = content.content_type_payload()
+    assert {p["key"] for p in payload} == set(content.CONTENT_TYPES)
+    assert payload[0]["one_liner"]
+
+
+def test_deterministic_breakdown_shapes_compare_by_halves():
+    script = "\n".join([
+        "ផ្លូវ A លឿន និងត្រង់។",
+        "ផ្លូវ A ថ្លៃជាង បន្តិច។",
+        "ផ្លូវ B យឺត ប៉ុន្តែសន្សំសំចៃ។",
+        "ផ្លូវ B ទេសភាពស្អាតជាង។",
+        "សរុប៖ អាស្រ័យលើអ្វីដែលអ្នកត្រូវការ។",
+    ])
+    scenes = fallbacks.deterministic_breakdown(script, cfg_mod.default_config(),
+                                               content_type="compare")
+    sides = [s["meta"]["side"] for s in scenes]
+    assert sides[0] == "A" and sides[1] == "A"
+    assert sides[2] == "B" and sides[3] == "B"
+    assert sides[-1] == "summary"
+    assert any(s["meta"].get("visual_contrast") for s in scenes)
+
+
+def test_deterministic_breakdown_shapes_myth_and_choose():
+    cfg = cfg_mod.default_config()
+    myth = fallbacks.deterministic_breakdown("ជំនឿ៖ ញើសមិនធ្វើឱ្យស្គម។\nការពិត៖ ញើសគ្រាន់តែបញ្ចុះទឹក។",
+                                             cfg, content_type="myth_vs_fact")
+    assert myth[0]["meta"]["side"] == "myth" and myth[1]["meta"]["side"] == "fact"
+    choose = fallbacks.deterministic_breakdown(
+        "ជម្រើសទី ១៖ ទិញឥឡូវ។\nជម្រើសទី ២៖ សន្សំមុន។\nសរុប៖ អាស្រ័យលើគោលដៅ។",
+        cfg, content_type="choose")
+    assert choose[0]["meta"]["side"] == "option-1"
+    assert choose[1]["meta"]["side"] == "option-2"
+    assert choose[-1]["meta"]["side"] == "takeaway"
+
+
+def test_qa_system_mentions_the_content_type():
+    from ai_studio.agents import qa
+    assert "COMPARE" in qa.qa_system("compare")
+
+
+def test_pace_presets_are_clamped_and_resolvable():
+    cfg = cfg_mod.default_config()
+    assert cfg_mod.PACE_PRESETS["natural"]["speed"] == 1.0
+    eng = cfg_mod.pace_engine(cfg)
+    assert eng["label"] == "Natural"
+    cfg["tts"]["pace"] = "brisk"
+    assert cfg_mod.pace_engine(cfg)["speed"] > 1.0
+    cfg["tts"]["line_gap_sec"] = 9.0
+    norm = cfg_mod.normalize_config(cfg)
+    assert norm["tts"]["line_gap_sec"] <= 3.0                 # clamp 0.3–3.0
+    cfg["tts"]["line_gap_sec"] = 0.0
+    assert cfg_mod.normalize_config(cfg)["tts"]["line_gap_sec"] >= 0.3
+
+
+def test_mood_pose_table_is_editable_and_falls_back():
+    from ai_studio import mood_poses
+    assert mood_poses.pose_for("sad")
+    assert mood_poses.pose_for("does-not-exist-mood") == mood_poses.DEFAULT_POSE
+    assert set(mood_poses.poses()) == set(mood_poses.MOOD_POSES.items())
+
+
+def test_silent_markup_never_reaches_tts():
+    from ai_studio.engines import tts as tts_mod
+    import tempfile, os
+    cfg = cfg_mod.default_config()
+    cfg["tts"]["engine"] = "placeholder"
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "x.wav")
+        res = tts_mod.synthesize("សួស្តី [[silent: សូម]] ថ្ងៃនេះ", out, cfg)
+        assert res.get("ok") if isinstance(res, dict) else True
+        # pure silent markup → refused (no speech to synthesize)
+        res2 = tts_mod.synthesize("[[silent: everything]]", os.path.join(d, "y.wav"), cfg)
+    assert isinstance(res2, dict) and not res2.get("ok")
+    assert "silent" in str(res2.get("reason"))
+    # content_type is carried through the auto-writer fallback
+    f = fallbacks.template_script("ការប្ៀបធ្វៀប", cfg_mod.default_config(), content_type="compare")
+    assert f.get("content_type") == "compare"

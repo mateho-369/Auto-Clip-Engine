@@ -23,7 +23,7 @@ from fastapi import (APIRouter, Body, Depends, File, Form, HTTPException, Query,
                      UploadFile, WebSocket, WebSocketDisconnect)
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
-from . import __version__, config as cfg_mod, khmer, media, style as style_mod
+from . import __version__, config as cfg_mod, content as content_mod, khmer, media, style as style_mod
 from . import vram as vram_mod
 from .db import Database
 from .events import RunProgress
@@ -92,19 +92,28 @@ async def api_create_project(payload: dict = Body(...)):
     if mode not in ("A", "B"):
         raise HTTPException(400, "mode must be 'A' (Director script) or 'B' (auto idea)")
     script = khmer.normalize_block(payload.get("script") or "")
-    topic = khmer.strip_emoji_and_marks(payload.get("topic_hint") or "")[:400]
+    # Khmer has no spaces between words: every truncation here is by
+    # *character cluster*, so a coeng/subscript pair can never be bisected.
+    topic = khmer.clip_clusters(khmer.strip_emoji_and_marks(payload.get("topic_hint") or ""), 400)
     if mode == "A" and not script:
         raise HTTPException(400, "Mode A needs the finished script pasted in — the studio will "
                                  "never write or rewrite it for you.")
     if mode == "A" and len(script) < 12:
         raise HTTPException(400, "That script looks too short to segment — paste the full text.")
-    title = (payload.get("title") or "").strip()[:120] or (
-        khmer.title_from(script) if script else khmer.strip_emoji_and_marks(topic)[:60] or
-        "Auto idea short")
+    from . import content as content_mod
+
+    title = khmer.clip_clusters((payload.get("title") or "").strip(), 120) or (
+        khmer.title_from(script) if script else
+        (khmer.truncate_clusters(khmer.strip_emoji_and_marks(topic), 60) or "Auto idea short"))
+    content_type = content_mod.normalize(payload.get("content_type") or "explainer")
+    character_id = str(payload.get("character_id") or "")
+    if character_id and not st.db.get_character(character_id):
+        raise HTTPException(400, "character_id does not match any saved character")
     proj = st.db.create_project(
         title=title, mode=mode, status="draft", language=payload.get("language") or "km",
         script=script if mode == "A" else "", script_locked=(mode == "A"),
         script_origin="director" if mode == "A" else "", topic_hint=topic,
+        content_type=content_type, character_id=character_id,
         style_notes=(payload.get("style_notes") or "")[:800],
         target_duration=float(payload.get("target_duration") or 30),
         voice_profile_id=payload.get("voice_profile_id") or "",
@@ -189,9 +198,18 @@ async def api_update_project(project_id: str, payload: dict = Body(...)):
     st = get_state()
     if not st.db.get_project(project_id):
         raise HTTPException(404, "project not found")
+    from . import content as content_mod
+
     allowed = {"title", "status", "topic_hint", "style_notes", "target_duration",
-               "voice_profile_id", "language", "mode"}
+               "voice_profile_id", "language", "mode", "content_type", "character_id"}
     kw = {k: v for k, v in payload.items() if k in allowed}
+    if "content_type" in kw:
+        kw["content_type"] = content_mod.normalize(kw["content_type"])
+    if "character_id" in kw:
+        cid = str(kw["character_id"] or "")
+        if cid and not st.db.get_character(cid):
+            raise HTTPException(400, "character_id does not match any saved character")
+        kw["character_id"] = cid
     if "script" in payload:
         proj = st.db.get_project(project_id)
         if (proj.get("mode") or "A").upper() == "A" and not payload.get("director_override"):
@@ -227,7 +245,7 @@ async def api_duplicate(project_id: str, payload: dict = Body(default={})):
         raise HTTPException(404, "project not found")
     keep_scenes = bool(payload.get("keep_scenes", True))
     new_mode = str(payload.get("mode") or src.get("mode") or "A").upper()[:1]
-    title = (payload.get("title") or f"{src.get('title', 'Project')} (copy)")[:120]
+    title = khmer.clip_clusters(payload.get("title") or f"{src.get('title', 'Project')} (copy)", 120)
     proj = st.db.create_project(title=title, mode=new_mode, status="draft",
                                 language=src.get("language") or "km",
                                 script=src.get("script") or "",
@@ -235,6 +253,8 @@ async def api_duplicate(project_id: str, payload: dict = Body(default={})):
                                 script_origin="director" if new_mode == "A" else (
                                     src.get("script_origin") or ""),
                                 topic_hint="" if new_mode == "A" else src.get("topic_hint", ""),
+                                content_type=src.get("content_type") or "explainer",
+                                character_id=src.get("character_id") or "",
                                 style_notes=src.get("style_notes") or "",
                                 target_duration=src.get("target_duration") or 30,
                                 voice_profile_id=src.get("voice_profile_id") or "",
@@ -320,12 +340,32 @@ async def api_save_scenes(project_id: str, payload: dict = Body(...)):
         text = khmer.normalize_block(s.get("text") or "")
         if not text:
             continue
+        meta = dict(s.get("meta") or {})
+        visual_source = str(meta.get("visual_source") or "generated_video")
+        if visual_source not in ("generated_video", "illustration", "character_demo"):
+            visual_source = "generated_video"
+        render_mode = str(meta.get("render_mode") or "broll")
+        if render_mode not in ("broll", "talking_head"):
+            render_mode = "broll"
+        if render_mode == "talking_head" and not (meta.get("character_id")
+                                                  or proj.get("character_id")):
+            raise HTTPException(400, "render_mode 'talking_head' needs a character on the project "
+                                     "or this scene")
+        if visual_source == "character_demo" and not (meta.get("character_id")
+                                                      or proj.get("character_id")):
+            raise HTTPException(400, "visual_source 'character_demo' needs a character on the "
+                                     "project or this scene — choose video or illustration")
+        if "character_id" in meta and meta.get("character_id"):
+            if not st.db.get_character(meta["character_id"]):
+                raise HTTPException(400, f"scene {len(clean) + 1}: unknown character_id")
         clean.append({"text": text,
-                      "visual_prompt": (s.get("visual_prompt") or "").strip()[:600],
-                      "mood_tag": (s.get("mood_tag") or "").strip()[:40],
+                      "visual_prompt": khmer.clip_clusters((s.get("visual_prompt") or "").strip(), 600),
+                      "mood_tag": khmer.clip_clusters((s.get("mood_tag") or "").strip(), 40),
                       "estimated_duration_sec": float(s.get("estimated_duration_sec") or 0),
                       "audio_duration": float(s.get("audio_duration") or 0),
-                      "sfx_prompt": (s.get("sfx_prompt") or "").strip()[:300]})
+                      "sfx_prompt": khmer.clip_clusters((s.get("sfx_prompt") or "").strip(), 300),
+                      "meta": {k: v for k, v in meta.items()
+                               if k in ("visual_source", "render_mode", "character_id", "side")}})
     if not clean:
         raise HTTPException(400, "no usable scenes")
     st.db.replace_scenes(project_id, clean)
@@ -409,6 +449,12 @@ async def api_start_run(project_id: str, payload: dict = Body(default={})):
         auto_start=not bool(payload.get("queue_only")))
     st.db.update_project(project_id, status="rendering", last_run_id=out["run_id"])
     return out
+
+
+@router.get("/runs")
+async def api_runs(limit: int = 100):
+    st = get_state()
+    return {"runs": st.db.list_runs(limit=min(500, max(1, limit)))}
 
 
 @router.get("/runs/{run_id}")
@@ -649,6 +695,9 @@ async def api_settings():
             "defaults": cfg_mod.DEFAULTS, "style_guideline": style_mod.STYLE_GUIDELINE,
             "placeholders": __import__("ai_studio.workflows", fromlist=["KNOWN_PLACEHOLDERS"])
             .KNOWN_PLACEHOLDERS,
+            "pace_presets": cfg_mod.PACE_PRESETS,
+            "subtitle_styles": media.SUBTITLE_STYLES, "title_styles": media.TITLE_STYLES,
+            "content_types": content_mod.content_type_payload(),
             "vram": {"limit_mb": cfg["vram"]["limit_mb"], "detected": plan.get("hardware")}}
 
 
@@ -685,11 +734,17 @@ async def api_settings_probe():
     caps = await asyncio.to_thread(cfg_mod.capabilities, cfg)
     await asyncio.to_thread(st.invalidate)
     plan = st.plan(refresh=True)
+    fixes = _check_hints(cfg, caps)
     return {"capabilities": caps, "plan": plan,
-            "tts": await asyncio.to_thread(_tts_probe, cfg),
-            "rvc": await asyncio.to_thread(_rvc_probe, cfg),
-            "video": await asyncio.to_thread(_video_probe, cfg),
-            "sfx": await asyncio.to_thread(_sfx_probe, cfg),
+            "tts": {**_tts_probe(cfg), "fix": fixes["tts"], "check_ok": bool(caps.get("sherpa_tts"))},
+            "rvc": {**_rvc_probe(cfg), "fix": fixes["rvc"],
+                    "check_ok": bool(caps.get("rvc_http") or caps.get("rvc_cli"))},
+            "video": {**_video_probe(cfg), "fix": fixes["video"], "check_ok": bool(caps.get("comfyui"))},
+            "sfx": {**_sfx_probe(cfg), "fix": fixes["sfx"], "check_ok": bool(caps.get("comfyui"))},
+            "talking_head": {**_talking_head_probe(cfg), "fix": fixes["talking_head"],
+                             "check_ok": bool(caps.get("sadtalker"))},
+            "illustration": {**_illustration_probe(cfg), "fix": fixes["illustration"],
+                             "check_ok": bool(caps.get("comfyui"))},
             "vram": await asyncio.to_thread(vram_mod.status, cfg, plan)}
 
 
@@ -715,6 +770,43 @@ def _sfx_probe(cfg):
     from .engines import sfx
 
     return sfx.probe(cfg)
+
+
+def _talking_head_probe(cfg):
+    from .engines import talking_head
+
+    return talking_head.probe(cfg)
+
+
+def _illustration_probe(cfg):
+    from .engines import illustration
+
+    return illustration.probe(cfg)
+
+
+def _check_hints(cfg, caps):
+    """The --check fix commands, verbatim, for the Services panel."""
+    return {
+        "tts": ([] if caps.get("sherpa_tts") else
+                ["./scripts/setup_khmer_tts.sh   (one-time MMS conversion)",
+                 "pip install sherpa-onnx"]),
+        "rvc": ([] if (caps.get("rvc_http") or caps.get("rvc_cli")) else
+                ["start RVC-WebUI's inference API (default http://127.0.0.1:9513)",
+                 "or set rvc.webui_dir to your RVC-WebUI folder"]),
+        "video": ([] if caps.get("comfyui") else
+                  ["python main.py --listen 127.0.0.1 --port 8188",
+                   "then load models/wan2.1_t2v_1.3b (see README-STUDIO.md)"]),
+        "sfx": ([] if caps.get("comfyui") else
+                ["python main.py --listen 127.0.0.1 --port 8188",
+                 "then load models/mmaudio_small (see README-STUDIO.md)"]),
+        "talking_head": ([] if caps.get("sadtalker") else
+                         ["git clone SadTalker (open-source); set talking_head.sadtalker_dir "
+                          "to its folder containing infer.py"]),
+        "illustration": ([] if caps.get("comfyui") else
+                         ["python main.py --listen 127.0.0.1 --port 8188",
+                          "then put flux2-klein-4b-fp8.safetensors + t5xxl + ae in "
+                          "ComfyUI/models (workflow shipped, editable)"]),
+    }
 
 
 @router.get("/workflows")
@@ -978,6 +1070,322 @@ async def api_training_status(job_id: str):
 async def api_jobs():
     st = get_state()
     return {"runs": st.db.list_runs(limit=60), "active": list(st.scheduler.runs.keys())}
+
+
+# ================================================================== characters
+# A Character is the studio's persistent NPC: a name + a set of expression
+# images (neutral / calm / happy / sad / ...). A project can set `character_id`;
+# scenes can override per-shot (`meta.character_id`) for two-character scripts.
+EXPRESSION_LABELS = ("neutral", "calm", "happy", "sad", "surprised", "thinking",
+                     "curious", "excited", "worried", "confident")
+
+
+@router.get("/characters")
+async def api_characters():
+    st = get_state()
+    rows = st.db.list_characters()
+    for r in rows:
+        for img in r.get("images") or []:
+            img["url"] = f"/api/characters/{r['id']}/images/{img['id']}/file"
+    return {"characters": rows, "expression_labels": EXPRESSION_LABELS,
+            "mood_to_expression": content_mod.MOOD_TO_EXPRESSION}
+
+
+@router.post("/characters")
+async def api_character_create(payload: dict = Body(...)):
+    st = get_state()
+    name = str(payload.get("name") or "").strip()[:80]
+    if not name:
+        raise HTTPException(400, "a character needs a name")
+    return {"character": st.db.create_character(name=name,
+                                                notes=(payload.get("notes") or "")[:1000])}
+
+
+@router.patch("/characters/{character_id}")
+async def api_character_update(character_id: str, payload: dict = Body(...)):
+    st = get_state()
+    if not st.db.get_character(character_id):
+        raise HTTPException(404, "character not found")
+    kw = {}
+    if "name" in payload:
+        kw["name"] = str(payload.get("name") or "").strip()[:80]
+    if "notes" in payload:
+        kw["notes"] = str(payload.get("notes") or "")[:1000]
+    return {"character": st.db.update_character(character_id, **kw)}
+
+
+@router.delete("/characters/{character_id}")
+async def api_character_delete(character_id: str):
+    st = get_state()
+    if not st.db.get_character(character_id):
+        raise HTTPException(404, "character not found")
+    st.db.delete_character(character_id)
+    return {"ok": True, "message": "character deleted; projects using it now have no character"}
+
+
+@router.post("/characters/{character_id}/images")
+async def api_character_image_upload(character_id: str,
+                                     expression_label: str = Form("neutral"),
+                                     image: UploadFile = File(...)):
+    """Upload one expression photo for a character (png/jpg/webp)."""
+    st = get_state()
+    char = st.db.get_character(character_id)
+    if not char:
+        raise HTTPException(404, "character not found")
+    label = str(expression_label or "neutral").strip()[:40] or "neutral"
+    root = ensure_dir(os.path.join(st.data_root, "characters", character_id))
+    safe = _safefilename(image.filename or "image.png", ".png")
+    raw = os.path.join(root, "raw_" + safe)
+    await _save_upload(image, raw)
+    dst = os.path.join(root, _safefilename(f"{label} {new_id(4)}.png", ".png"))
+    try:
+        await asyncio.to_thread(_normalize_image, raw, dst)
+        if os.path.exists(raw) and raw != dst:
+            os.remove(raw)
+    except Exception as e:
+        # keep raw_* on disk for inspection; normalized dst is only written on success
+        raise HTTPException(400, f"image could not be processed: {str(e)[:160]}")
+    row = st.db.add_character_image(character_id, label, dst)
+    return {"ok": True,
+            "image": {**row, "url": f"/api/characters/{character_id}/images/{row['id']}/file"},
+            "note": f"expression '{label}' uploaded for {char.get('name')}"}
+
+
+@router.get("/characters/{character_id}/images/{image_id}/file")
+async def api_character_image_file(character_id: str, image_id: str):
+    st = get_state()
+    row = st.db.get_character_image(image_id)
+    if not row or row["character_id"] != character_id or not row.get("image_path"):
+        raise HTTPException(404, "image not found")
+    if not os.path.exists(row["image_path"]):
+        raise HTTPException(404, "image file missing on disk")
+    return FileResponse(row["image_path"], media_type="image/png",
+                        filename=os.path.basename(row["image_path"]))
+
+
+@router.delete("/characters/{character_id}/images/{image_id}")
+async def api_character_image_delete(character_id: str, image_id: str):
+    st = get_state()
+    row = st.db.get_character_image(image_id)
+    if not row or row["character_id"] != character_id:
+        raise HTTPException(404, "image not found")
+    st.db.delete_character_image(image_id)
+    try:
+        if row.get("image_path") and os.path.exists(row["image_path"]):
+            os.remove(row["image_path"])
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+def _normalize_image(src, dst):
+    """Re-encode to the studio's 512x768 portrait PNG so ffmpeg/PIL/I2V always
+    see one format. Pillow first, ffmpeg scale/pad as the fallback."""
+    try:
+        from PIL import Image
+        im = Image.open(src).convert("RGB")
+        w, h = im.size
+        tw, th = 512, 768
+        scale = max(tw / w, th / h)
+        im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+        left = (im.width - tw) // 2
+        top = (im.height - th) // 2
+        im = im.crop((left, top, left + tw, top + th))
+        im.save(dst, "PNG")
+        return dst
+    except Exception:
+        from .util import run_ffmpeg
+        run_ffmpeg(["-i", src, "-vf",
+                    "scale=512:768:force_original_aspect_ratio=increase,crop=512:768,"
+                    "format=rgb24", "-frames:v", "1", dst], timeout=300)
+        return dst
+
+
+# ============================================================ scene still images
+@router.post("/projects/{project_id}/scenes/{idx}/image")
+async def api_scene_image_upload(project_id: str, idx: int, image: UploadFile = File(...)):
+    """Director's custom picture for one scene — wins over all generation.
+
+    Stored as ``00_custom.png`` next to the scene; the video stage detects it and
+    makes a Ken Burns clip instead of calling a model.
+    """
+    st = get_state()
+    prj = st.db.get_project(project_id)
+    if not prj:
+        raise HTTPException(404, "project not found")
+    scene = st.db.get_scene(project_id, idx)
+    if not scene:
+        raise HTTPException(404, f"scene {idx} not found")
+    scene_dir = ensure_dir(os.path.join(st.data_root, "projects", project_id, "scenes",
+                                        f"{int(idx):02d}"))
+    safe = _safefilename(image.filename or "image.png", ".png")
+    raw = os.path.join(scene_dir, "00_custom_raw" + os.path.splitext(safe)[1])
+    await _save_upload(image, raw)
+    dst = os.path.join(scene_dir, "00_custom.png")
+    try:
+        await asyncio.to_thread(_normalize_image, raw, dst)
+        if os.path.exists(raw):
+            os.remove(raw)
+    except Exception as e:
+        raise HTTPException(400, f"image could not be processed: {str(e)[:160]}")
+    meta = dict(scene.get("meta") or {})
+    meta["visual_source"] = "illustration"
+    _set_scene_meta(st.db, project_id, idx, meta)
+    return {"ok": True, "scene": st.db.get_scene(project_id, idx),
+            "url": f"/api/files?path={os.path.abspath(dst)}",
+            "note": "custom image saved for this scene (illustration source, generation skipped)"}
+
+
+@router.delete("/projects/{project_id}/scenes/{idx}/image")
+async def api_scene_image_delete(project_id: str, idx: int):
+    st = get_state()
+    scene_dir = os.path.join(st.data_root, "projects", project_id, "scenes", f"{int(idx):02d}")
+    removed = False
+    for cand in ("00_custom.png", "00_custom.jpg", "00_custom.jpeg", "00_custom.webp"):
+        p = os.path.join(scene_dir, cand)
+        if os.path.exists(p):
+            try:
+                os.remove(p)
+                removed = True
+            except Exception:
+                pass
+    scene = st.db.get_scene(project_id, idx)
+    if scene:
+        meta = dict(scene.get("meta") or {})
+        meta.pop("visual_source", None)
+        meta["visual_source"] = "generated_video"
+        _set_scene_meta(st.db, project_id, idx, meta)
+    return {"ok": True, "removed": removed}
+
+
+def _set_scene_meta(db, project_id, idx, meta):
+    """Scene meta lives in meta_json; db.update_scene only touches scalar cols,
+    so the whole board is rewritten (cheap, and single-writer by design)."""
+    all_scenes = db.list_scenes(project_id)
+    for s in all_scenes:
+        if s["idx"] == idx:
+            s["meta"] = dict(s.get("meta") or {})
+            s["meta"].update(meta or {})
+    db.replace_scenes(project_id, all_scenes)
+    return db.get_scene(project_id, idx)
+
+
+# ============================================================ ollama models
+@router.get("/ollama/models")
+async def api_ollama_models():
+    """The AI Team panel's model picker: models actually installed in Ollama."""
+    st = get_state()
+    try:
+        from .llm import LLM
+        llm = LLM(st.config())
+        names = await asyncio.to_thread(llm.list_models)
+        return {"models": names, "host": llm.host, "online": bool(names)}
+    except Exception as e:
+        return {"models": [], "host": (st.config().get("ollama") or {}).get("host", ""),
+                "online": False, "error": str(e)[:160]}
+
+
+# ============================================================ content types
+@router.get("/content-types")
+async def api_content_types():
+    return {"types": content_mod.content_type_payload()}
+
+
+# ============================================================ style previews
+@router.get("/style-previews")
+async def api_style_previews(refresh: bool = Query(False)):
+    """Pre-rendered ~3s samples for every subtitle *and* title style (cached in
+    <data>/style-previews, regenerated on ?refresh=true)."""
+    st = get_state()
+    return await asyncio.to_thread(_style_previews, st, refresh)
+
+
+def _style_previews(st, refresh=False):
+    from . import previz as previz_mod
+
+    root = ensure_dir(os.path.join(st.data_root, "style-previews"))
+    # one shared source clip (2.8s calm scene) for all subtitle styles
+    base_mp4 = os.path.join(root, "base.mp4")
+    if refresh or not os.path.exists(base_mp4):
+        previz_mod.render_clip(base_mp4, duration=2.8, width=480, height=854, fps=20,
+                               mood_tag="calm-warm",
+                               visual_prompt="soft golden light over a quiet rice field, gentle mist",
+                               seed=7, motion=0.5)
+    total_dur = media_duration(base_mp4, 0.0) or 2.8
+    srt_path = os.path.join(root, "sample.srt")
+    write_text_file(srt_path, _sample_srt(total_dur, 2.6))
+    sub_styles, title_styles = [], []
+    for key in media.SUBTITLE_STYLE_KEYS:
+        out = os.path.join(root, f"subtitles_{key}.mp4")
+        err = ""
+        if refresh or not os.path.exists(out):
+            try:
+                media.burn_subtitles(base_mp4, srt_path, out, style=key)
+            except Exception as e:
+                err = str(e)[:180]
+                # a failed sample must still be LISTED (honest badge), never a gap
+                try:
+                    media.burn_subtitles(base_mp4, srt_path, out, style="clean")
+                except Exception as e2:
+                    err = f"{err}; even clean burn failed: {str(e2)[:120]}"
+        sub_styles.append({"key": key, "label": media.SUBTITLE_STYLES[key]["label"],
+                           "url": f"/api/files?path={os.path.abspath(out)}" if os.path.exists(out) else "",
+                           "desc": media.SUBTITLE_STYLES[key].get(
+                               "desc") or media.SUBTITLE_STYLES[key].get("description", ""),
+                           "font_size": media.SUBTITLE_STYLES[key].get("font_size"),
+                           "error": err})
+    for key in media.TITLE_STYLE_KEYS:
+        out = os.path.join(root, f"title_{key}.mp4")
+        err = ""
+        if refresh or not os.path.exists(out):
+            try:
+                media.render_title_card(out, "មួយជំហាន ឆ្ពោះទៅមុខ", key, 480, 854, 20, 2.6)
+            except Exception as e:
+                err = str(e)[:180]
+        if os.path.exists(out):
+            title_styles.append({"key": key, "label": media.TITLE_STYLES[key]["label"],
+                                 "url": f"/api/files?path={os.path.abspath(out)}",
+                                 "desc": media.TITLE_STYLES[key].get("desc")
+                                 or media.TITLE_STYLES[key].get("description", ""),
+                                 "error": err})
+    return {"subtitle_styles": sub_styles, "title_styles": title_styles,
+            "source": {"duration": round(total_dur, 2), "width": 480, "height": 854},
+            "note": "samples are cached; add ?refresh=true to rebuild"}
+
+
+def _sample_srt(total_dur, end_at=None):
+    end = float(end_at or min(2.6, max(1.0, total_dur - 0.2)))
+    return "\n".join([
+        "1\n00:00:00,200 --> " + _srt_ts(end - 0.35) + "\nសួស្តី ថ្ងៃនេះយើងមកស្វែងយល់អំពីរឿងមួយ\n",
+        "2\n" + _srt_ts(end + 0.4) + " --> " + _srt_ts(min(total_dur, end + 1.3)) +
+        "\nhello world this is a subtitle preview\n",
+    ])
+
+
+def _srt_ts(sec):
+    ms = int(round(sec * 1000))
+    return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
+
+
+def write_text_file(path, text):
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    return path
+
+
+@router.get("/files")
+async def api_files(path: str = Query(...)):
+    """Serve a file only when its absolute path is inside the studio data root."""
+    st = get_state()
+    import mimetypes
+    root = os.path.abspath(st.data_root)
+    p = os.path.abspath(path)
+    if not p.startswith(root + os.sep):
+        raise HTTPException(403, "path is outside the studio data directory")
+    if not os.path.exists(p):
+        raise HTTPException(404, "file not found")
+    return FileResponse(p, media_type=mimetypes.guess_type(p)[0] or "application/octet-stream",
+                        filename=os.path.basename(p))
 
 
 @router.get("/memory/search")

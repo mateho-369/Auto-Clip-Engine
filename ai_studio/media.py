@@ -239,15 +239,20 @@ def np_max(x):
 
 
 # ------------------------------------------------------------- concat / mux
-def normalize_clip(src, dst, width, height, fps, duration=None, silent=True):
+def normalize_clip(src, dst, width, height, fps, duration=None, silent=True, tail_pad=0.0):
     vf = (f"scale={int(width)}:{int(height)}:force_original_aspect_ratio=decrease,"
           f"pad={int(width)}:{int(height)}:(ow-iw)/2:(oh-ih)/2:color=black,format=yuv420p")
+    tail = max(0.0, float(tail_pad or 0))
+    if tail > 0.02:
+        # deterministic pause between lines: freeze the last frame (never loops,
+        # never black) — assembly uses tts.line_gap_sec for this
+        vf += f",tpad=stop_mode=clone:stop_duration={tail:.3f}"
     args = ["-i", src, "-vf", vf, "-r", str(int(fps)), "-c:v", "libx264", "-preset", "veryfast",
             "-crf", "21", "-pix_fmt", "yuv420p"]
     if silent:
         args += ["-an"]
     if duration:
-        args += ["-t", f"{float(duration):.3f}"]
+        args += ["-t", f"{float(duration) + tail:.3f}"]
     args += [dst]
     run_ffmpeg(args, timeout=1800)
     return dst
@@ -360,7 +365,158 @@ def thumbnail(video, dst_png, at_sec=0.6, width=320):
         return None
 
 
-def burn_subtitles(video, srt, dst, force_style="FontName=Khmer OS Battambang,FontSize=15,PrimaryColour=&H00FFFFFF,OutlineColour=&HC0000000,BorderStyle=1,Outline=2,Shadow=0,MarginV=56,MarginL=28,MarginR=28,Alignment=2"):
+# ------------------------------------------------------ subtitle / title styles
+# Style library replacing the single hardcoded force_style string. Each entry
+# is the full libass inline style (or karaoke metadata) the frontend's Style
+# Gallery shows by *preview*, never by name alone.
+SUBTITLE_STYLE_KEYS = ("clean", "bold_yellow", "minimal_top", "karaoke")
+_SUB_BASE = "FontName=Khmer OS Battambang,FontSize=15,PrimaryColour=&H00FFFFFF," \
+            "OutlineColour=&HC0000000,BorderStyle=1,Outline=2,Shadow=0,MarginV=56," \
+            "MarginL=28,MarginR=28,Alignment=2"
+SUBTITLE_STYLES = {
+    "clean": {"label": "Clean", "desc": "Today's look — white, centred, soft outline.",
+              "force_style": _SUB_BASE, "karaoke": False},
+    "bold_yellow": {"label": "Bold yellow",
+                    "desc": "High-contrast bold yellow — readable over bright b-roll.",
+                    "force_style": "FontName=Khmer OS Battambang,FontSize=17,"
+                                   "PrimaryColour=&H0000FFFF,Bold=1,"
+                                   "OutlineColour=&H80000000,BorderStyle=1,Outline=3,"
+                                   "Shadow=1,MarginV=56,MarginL=24,MarginR=24,Alignment=2",
+                    "karaoke": False},
+    "minimal_top": {"label": "Minimal top",
+                    "desc": "Small clean text pinned at the top — leaves the picture open.",
+                    "force_style": "FontName=Khmer OS Battambang,FontSize=13,"
+                                   "PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,"
+                                   "BorderStyle=1,Outline=1,Shadow=0,MarginV=36,MarginL=28,"
+                                   "MarginR=28,Alignment=8",
+                    "karaoke": False},
+    "karaoke": {"label": "Karaoke", "desc": "Word-by-word highlight (proportional timing).",
+                "force_style": "FontName=Khmer OS Battambang,FontSize=15,"
+                               "PrimaryColour=&H0000FFFF,Bold=1,"
+                               "SecondaryColour=&H00FFFFFF,OutlineColour=&HC0000000,"
+                               "BorderStyle=1,Outline=2,Shadow=0,MarginV=56,MarginL=28,"
+                               "MarginR=28,Alignment=2",
+                "karaoke": True},
+}
+TITLE_STYLE_KEYS = ("centered_fade", "bottom_left_minimal", "bold_pop")
+TITLE_STYLES = {
+    "centered_fade": {"label": "Centered fade",
+                      "desc": "Title centre-frame, fades in and out.",
+                      "layout": "center", "fontsize": 52, "yellow": False},
+    "bottom_left_minimal": {"label": "Bottom-left minimal",
+                            "desc": "Small title in the lower-left corner, stays quiet.",
+                            "layout": "bottom_left", "fontsize": 34, "yellow": False},
+    "bold_pop": {"label": "Bold pop",
+                 "desc": "Big bold yellow title with a hard outline.",
+                 "layout": "center", "fontsize": 58, "yellow": True},
+}
+
+
+def subtitle_force_style(style_key):
+    st = SUBTITLE_STYLES.get(style_key or "clean", SUBTITLE_STYLES["clean"])
+    return st["force_style"]
+
+
+def _fmt_ass_time(sec):
+    sec = max(0.0, float(sec))
+    h = int(sec // 3600)
+    m = int((sec % 3600) // 60)
+    s = sec % 60
+    return f"{h}:{m:02d}:{int(s):02d}.{int(round((s % 1) * 100)):02d}"
+
+
+def words_for_timing(text):
+    """(word, weight) list for karaoke timing.
+
+    Khmer is *scriptio continua*: when a sentence has spaces we use them as
+    word separators (the studio's scripts do); otherwise we fall back to
+    character-cluster groups of 2, which are the smallest pieces a viewer can
+    plausibly read. Weight = the same syllable estimate the whole pipeline
+    uses for pacing, so the karaoke sweep and the spoken rhythm agree.
+    """
+    from . import khmer
+
+    t = khmer.display_text(text or "")
+    if not t:
+        return []
+    if khmer.is_khmer(t):
+        toks = [w for w in re.split(r"\s+", t) if w]
+        if len(toks) > 1 or " " in t:
+            return [(w, max(0.2, khmer.syllable_estimate(w))) for w in toks]
+        units = khmer.split_clusters(t)
+        words, cur = [], []
+        for u in units:
+            cur.append(u)
+            if len(cur) >= 2:
+                words.append("".join(cur))
+                cur = []
+        if cur:
+            words.append("".join(cur))
+        return [(w, max(0.2, khmer.syllable_estimate(w))) for w in words]
+    toks = re.split(r"\s+", t)
+    return [(w, max(1, len(re.findall(r"[aeiouy]+", w, re.I)))) for w in toks if w]
+
+
+def write_karaoke_ass(scene_windows, dst, style="karaoke", width=480, height=854):
+    """ASS with ``\\k`` karaoke tags — burned by the same libass `subtitles`
+    filter (it supports karaoke natively).
+
+    Timing is an honest approximation: sherpa-onnx gives no real word
+    timestamps, so each scene's known audio window is distributed across its
+    words proportionally to :func:`khmer.syllable_estimate` weight. This is
+    NOT forced alignment — see README-STUDIO.md (real ASR alignment is the
+    documented future upgrade).
+    """
+    from . import khmer
+
+    st = SUBTITLE_STYLES.get(style, SUBTITLE_STYLES["karaoke"])
+    lines = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        f"PlayResX: {int(width)}", f"PlayResY: {int(height)}",
+        "WrapStyle: 0", "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, "
+        "Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, "
+        "Encoding",
+        f"Style: Default,{st.get('font', 'Khmer OS Battambang')},15,"
+        f"{st.get('primary', '&H00FFFFFF')},{st.get('secondary', '&H0000FFFF')},"
+        f"{st.get('outline', '&HC0000000')},&H80000000,{int(st.get('bold', 1))},0,0,0,100,100,0,0,"
+        f"1,2,1,2,28,28,56,1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    for start, end, text in scene_windows:
+        words = words_for_timing(text)
+        weights = [w for _w, w in words]
+        total = sum(weights) or 1.0
+        span = max(0.4, float(end) - float(start))
+        cums, acc = [], 0.0
+        for w in weights:
+            acc += w
+            cums.append(span * acc / total)
+        tags = []
+        prev = 0.0
+        for (word, _w), cum in zip(words, cums):
+            k = max(1, int(round((cum - prev) * 100)))
+            tags.append(f"{{\\k{k}}}{word}")
+            prev = cum
+        text_line = " ".join(tags)
+        # manual line wrap (spaceless script) using cluster breaks
+        wrapped = khmer.wrap_clusters(text_line, max_clusters=64)
+        text_line = "\\N".join(wrapped)
+        lines.append(f"Dialogue: 0,{_fmt_ass_time(start)},{_fmt_ass_time(end)},Default,,0,0,0,,{text_line}")
+    ensure_dir(os.path.dirname(dst) or ".")
+    with open(dst, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return dst
+
+
+def burn_subtitles(video, srt, dst, force_style="FontName=Khmer OS Battambang,FontSize=15,PrimaryColour=&H00FFFFFF,OutlineColour=&HC0000000,BorderStyle=1,Outline=2,Shadow=0,MarginV=56,MarginL=28,MarginR=28,Alignment=2",
+                   style="clean"):
     """Only used when assembly.burn_captions is on and libass is available.
 
     Font choice matters here, not just cosmetically: this Windows ffmpeg
@@ -380,6 +536,8 @@ def burn_subtitles(video, srt, dst, force_style="FontName=Khmer OS Battambang,Fo
     fontsdir = os.environ.get("SystemRoot", r"C:\Windows") + r"\Fonts" if os.name == "nt" else ""
     if fontsdir and os.path.isdir(fontsdir):
         vf += f":fontsdir='{fontsdir.replace(chr(92), '/').replace(':', chr(92) + ':')}'"
+    if style and style not in ("clean",) and style in SUBTITLE_STYLES:
+        force_style = subtitle_force_style(style)
     vf += f":force_style='{force_style}'"
     run_ffmpeg(["-i", video, "-vf", vf,
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-c:a", "copy", dst],
@@ -387,54 +545,186 @@ def burn_subtitles(video, srt, dst, force_style="FontName=Khmer OS Battambang,Fo
     return dst
 
 
+def burn_ass(video, ass, dst, style="karaoke"):
+    """Burn an .ass file (karaoke ``\\k`` tags) via the same libass filter."""
+    if not _has_filter("subtitles"):
+        raise RuntimeError("this ffmpeg build has no 'subtitles' filter (needs libass)")
+    ass_esc = str(ass).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+    vf = f"subtitles='{ass_esc}'"
+    fontsdir = os.environ.get("SystemRoot", r"C:\Windows") + r"\Fonts" if os.name == "nt" else ""
+    if fontsdir and os.path.isdir(fontsdir):
+        vf += f":fontsdir='{fontsdir.replace(chr(92), '/').replace(':', chr(92) + ':')}'"
+    run_ffmpeg(["-i", video, "-vf", vf,
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-c:a", "copy", dst],
+               timeout=3600)
+    return dst
+
+
+# -------------------------------------------------------------- title cards
+def _find_font():
+    """A usable font (Khmer-capable preferred) for title rendering."""
+    cands = []
+    if os.name == "nt":
+        root = os.environ.get("WINDIR", r"C:\Windows")
+        for d in (os.path.join(root, "Fonts"),):
+            if os.path.isdir(d):
+                cands += [os.path.join(d, f) for f in os.listdir(d)
+                          if f.lower().endswith((".ttf", ".otf")) and any(
+                              k in f.lower() for k in ("khmer", "noto", "battambang"))]
+                cands += [os.path.join(d, f) for f in os.listdir(d)
+                          if f.lower().endswith((".ttf", ".otf"))]
+    for d in ("/usr/share/fonts/truetype/noto", "/usr/share/fonts/truetype/dejavu",
+              "/usr/share/fonts", "/usr/local/share/fonts"):
+        if os.path.isdir(d):
+            for root, _dirs, files in os.walk(d):
+                for f in files:
+                    if f.lower().endswith((".ttf", ".otf")):
+                        cands.append(os.path.join(root, f))
+    for c in cands:
+        if os.path.exists(c):
+            return c
+    return None
+
+
+def render_title_card(dst, title, style="centered_fade", width=480, height=854, fps=24,
+                      duration=2.6):
+    """A title intro clip (ffmpeg drawtext; PIL fallback if no font renders).
+
+    ``style`` is one of :data:`TITLE_STYLES`. Safe for Khmer: with no
+    Khmer-capable font installed the PIL fallback draws the Latin/ASCII part and
+    the notes say so — the title card is optional and never breaks the cut.
+    """
+    spec = TITLE_STYLES.get(style, TITLE_STYLES["centered_fade"])
+    duration = max(1.2, float(duration))
+    font = _find_font()
+    if font:
+        try:
+            return _render_title_drawtext(dst, title, spec, font, width, height, fps, duration)
+        except Exception:
+            pass
+    try:
+        return _render_title_pil(dst, title, spec, width, height, fps, duration, font)
+    except Exception as e:
+        raise RuntimeError(f"title card render failed (no font?): {str(e)[:120]}")
+
+
+def _esc_drawtext(s):
+    return (str(s).replace("\\", "\\\\").replace(":", r"\:").replace("'", r"\'")
+            .replace("%", r"\%").replace(",", r"\,"))
+
+
+def _render_title_drawtext(dst, title, spec, font, width, height, fps, duration):
+    fs = int(spec.get("fontsize", 48))
+    colour = "0xFFFF00" if spec.get("yellow") else "0xFFFFFF"
+    layout = spec.get("layout", "center")
+    esc = _esc_drawtext(title)
+    if layout == "bottom_left":
+        pos = f"x=36:y=h-{int(height * 0.22)}"
+        align = 1
+    else:
+        pos = "x=(w-text_w)/2:y=(h-text_h)/2"
+        align = 5
+    border = 4 if spec.get("yellow") else 2
+    fade = duration > 1.4
+    vf = (f"drawtext=fontfile='{font}':text='{esc}':{pos}:fontsize={fs}:fontcolor={colour}:"
+          f"borderw={border}:bordercolor=black:shadow=1:shadowcolor=black@0.6")
+    if fade:
+        out_at = max(0.1, duration - 0.5)
+        vf += f":alpha='if(lt(t,0.4),t/0.4,if(lt(t,{out_at:.2f}),1,({duration:.2f}-t)/0.5))'"
+    args = ["-f", "lavfi", "-i", f"color=c=0x101418:s={width}x{height}:r={fps}:d={duration:.3f}",
+            "-vf", vf, "-r", str(int(fps)), "-c:v", "libx264", "-preset", "veryfast",
+            "-crf", "21", "-pix_fmt", "yuv420p", "-an", dst]
+    run_ffmpeg(args, timeout=900)
+    return dst
+
+
+def _render_title_pil(dst, title, spec, width, height, fps, duration, font):
+    """PIL-drawn title card (still image) → Ken Burns clip."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        raise RuntimeError("Pillow not installed for title-card fallback")
+    img = Image.new("RGB", (int(width), int(height)), (16, 20, 24))
+    d = ImageDraw.Draw(img)
+    fs = int(spec.get("fontsize", 48))
+    try:
+        f = ImageFont.truetype(font, fs) if font else ImageFont.load_default()
+    except Exception:
+        f = ImageFont.load_default()
+    wrapped = _wrap_khmer(title, max_chars=max(10, int(width / 38)))
+    lines = wrapped.split("\n")
+    line_h = int(fs * 1.35)
+    total_h = line_h * len(lines)
+    if spec.get("layout") == "bottom_left":
+        x, y = 36, int(height * 0.78) - total_h
+    else:
+        x, y = int(width * 0.08), int((height - total_h) / 2)
+    colour = (255, 255, 0) if spec.get("yellow") else (255, 255, 255)
+    for i, ln in enumerate(lines):
+        try:
+            bbox = d.textbbox((0, 0), ln, font=f)
+            tw = bbox[2] - bbox[0]
+        except Exception:
+            tw = len(ln) * fs // 2
+        cx = x if spec.get("layout") == "bottom_left" else x + max(0, (width - 2 * x - tw) // 2)
+        d.text((cx + 2, y + i * line_h + 2), ln, font=f, fill=(0, 0, 0))
+        d.text((cx, y + i * line_h), ln, font=f, fill=colour)
+    png = dst + ".png"
+    img.save(png)
+    return make_silent_video_from_image(png, dst, duration=duration, width=width, height=height,
+                                        fps=fps, motion="kenburns")
+
+
 _KHMER_BREAK_CHARS = "។៕៖,.!? "
 
 
 def _safe_khmer_cut(text, cut):
-    """Never let a line break land inside a Khmer grapheme cluster.
+    """Deprecated-shim kept for callers: cluster-safe cut via ``khmer``.
 
-    Khmer dependent vowels/diacritics are combining marks (Unicode category
-    Mn/Mc) that must stay glued to the base consonant before them, and the
-    coeng sign (U+17D2) glues to the consonant *after* it to form a stacked
-    subscript — breaking between either pair renders as visibly broken
-    script (a bare "ភ" on one line, the subscript "្លែត" orphaned on the
-    next). Back the cut up until neither case applies.
+    The real wrapper below uses :func:`ai_studio.khmer.split_clusters`, which
+    treats ``base + ្ + subscript`` as ONE unit — the old codepoint-arithmetic
+    version could still produce a line starting with a lone ``្``. This helper
+    snapshots the same guarantee: it only ever returns a boundary between two
+    character clusters.
     """
-    while cut > 0 and (
-        (cut < len(text) and unicodedata.category(text[cut])[0] == "M")
-        or text[cut - 1] == "្"
-    ):
-        cut -= 1
-    return max(cut, 1)
+    from . import khmer as khmer_mod
+
+    cut = max(1, min(int(cut), len(text)))
+    prefixes = khmer_mod.split_clusters(text)
+    if cut >= len(prefixes):
+        return len(text)
+    return len("".join(prefixes[:cut]))
 
 
 def _wrap_khmer(text, max_chars=16):
-    """Insert manual line breaks for burned captions.
+    """Insert manual line breaks for burned captions — CLUSTER-SAFE.
 
     Khmer script has no spaces between words, so libass's whitespace-based
     auto-wrap has nowhere to break a long line — it silently overflows the
-    frame instead (this was cutting text off at the left/right edges on a
-    480px-wide portrait video). Break by hand instead, preferring a natural
-    punctuation boundary near the target width, falling back to a hard
-    character-count cut only when there is no punctuation to break on — and
-    always snapped to a grapheme-cluster-safe position either way.
+    frame instead. Break by hand using :func:`ai_studio.khmer.split_clusters`:
+    a coeng subscript pair (``ស្ + វ``) is a single unit and can never be
+    split across a line boundary, which is exactly the corruption that made
+    ``ស្វែងយល់`` render as ``ស្ វែងយល់``. Natural punctuation breaks near the
+    target width are preferred, then a hard cluster-count cut.
     """
+    from . import khmer as khmer_mod
+
     text = text.strip()
-    lines = []
-    while len(text) > max_chars:
-        cut = -1
-        for i in range(min(max_chars, len(text) - 1), max(0, max_chars - 8), -1):
-            if text[i] in _KHMER_BREAK_CHARS:
-                cut = i + 1
-                break
-        if cut < 0:
-            cut = max_chars
-        cut = _safe_khmer_cut(text, cut)
-        lines.append(text[:cut].strip())
-        text = text[cut:].strip()
-    if text:
-        lines.append(text)
-    return "\n".join(lines) if lines else text
+    if not text:
+        return text
+    units = khmer_mod.split_clusters(text)
+    budget = max(1, int(max_chars))
+    lines, cur = [], []
+    for cl in units:
+        cur.append(cl)
+        # break at punctuation once the line is reasonably full, or at the
+        # hard cluster budget — either way the break is BETWEEN clusters
+        if len(cur) >= budget or (cl in _KHMER_BREAK_CHARS and len(cur) >= max(2, int(budget * 0.6))):
+            lines.append("".join(cur).strip())
+            cur = []
+    if cur:
+        lines.append("".join(cur).strip())
+    return "\n".join(l for l in lines if l) or text
 
 
 def _split_sentences(text):

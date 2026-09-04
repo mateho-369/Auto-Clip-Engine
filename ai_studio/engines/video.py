@@ -26,42 +26,82 @@ STYLE_TAIL = ("calm documentary look, soft natural light, gentle slow camera dri
               "muted warm palette, peaceful natural scenery, film-like, no text, no captions")
 
 
-def compose_prompt(scene, cfg):
-    """Positive prompt = the scene's visual tag + house look + the spoken line's mood."""
+# "standing in place, [action]-miming motion, minimal background movement, camera static"
+# — the character performs a gesture without moving through the scene (NPC mode 3b).
+IN_PLACE_TAIL = ("single character, standing in place, {action} miming motion, "
+                 "minimal background movement, camera static, no camera pan, "
+                 "full body visible, studio-like clean backdrop")
+
+
+def _scene_flags(scene):
+    s = scene.get("meta") or {}
+    visual_source = s.get("visual_source") or scene.get("visual_source") or "generated_video"
+    render_mode = s.get("render_mode") or scene.get("render_mode") or "broll"
+    return visual_source, render_mode
+
+
+def action_keywords(text, limit=4):
+    """Small deterministic keyword extractor for the [action] slot.
+
+    The two things being demonstrated change per project (no fixed list):
+    prefer frequent long-ish words; the in-place prompt just needs a readable
+    label, and the scene text is the best source there is.
+    """
+    import re as _re
+
+    t = (text or "").lower()
+    tokens = [w for w in _re.split(r"[^a-z0-9\u1780-\u17ff]+", t) if len(w) > 2]
+    from collections import Counter
+    words = [w for w, _n in Counter(tokens).most_common(limit)]
+    return " and ".join(words) if words else "gesture"
+
+
+def compose_prompt(scene, cfg, character=False):
+    """Positive prompt = visual tag + house look + mood atmosphere + (character
+    pose when a character is in the shot) + (in-place action when character_demo)."""
     vp = (scene.get("visual_prompt") or "").strip().rstrip(".")
     if not vp:
         from .. import style as style_mod
         vp = style_mod.DEFAULT_VISUAL
     mood = (scene.get("mood_tag") or "").replace("-", " ")
+    visual_source, render_mode = _scene_flags(scene)
     parts = [vp]
     if mood and mood.lower() not in vp.lower():
         parts.append(f"{mood} atmosphere")
+    if character:
+        from ..mood_poses import pose_for
+        parts.append(pose_for(scene.get("mood_tag") or ""))
+    if visual_source == "character_demo":
+        parts.append(IN_PLACE_TAIL.format(action=action_keywords(scene.get("text") or "")))
     style_tail = (cfg.get("video", {}) or {}).get("style_tail")
     parts.append(style_tail if style_tail is not None else STYLE_TAIL)
     return ", ".join(p for p in parts if p)[:900]
 
 
 def render(scene, out_path, cfg, plan, target_duration, progress=None, seed=0,
-           reference_image=None, attempt=1):
+           reference_image=None, attempt=1, character=False):
     """Produce one silent clip for a scene. Returns a dict (never raises)."""
     v = cfg.get("video", {})
     engine = (plan.get("video") or {}).get("engine", "previz") if plan else "previz"
     if engine == "comfyui":
-        res = _comfyui(scene, out_path, cfg, target_duration, progress, seed, reference_image, attempt)
+        res = _comfyui(scene, out_path, cfg, target_duration, progress, seed, reference_image,
+                       attempt, character=character)
         if res.get("ok"):
             return res
         if not res.get("oom") and "fallback_to_previz" not in res:
             res["fallback_to_previz"] = True
-        prev = previz_clip(scene, out_path, cfg, target_duration, progress, seed)
+        prev = previz_clip(scene, out_path, cfg, target_duration, progress, seed,
+                           character=character)
         prev["fallback_from"] = "comfyui"
         prev["fallback_reason"] = str(res.get("reason", ""))[:300]
         return prev
     if engine == "previz":
-        return previz_clip(scene, out_path, cfg, target_duration, progress, seed)
+        return previz_clip(scene, out_path, cfg, target_duration, progress, seed,
+                           character=character)
     return {"ok": False, "engine": engine, "reason": f"video engine '{engine}' does not render here"}
 
 
-def _values(scene, cfg, target_duration, seed, out_prefix, frames, width, height):
+def _values(scene, cfg, target_duration, seed, out_prefix, frames, width, height, character=False):
     v = cfg.get("video", {})
     fps = int(v.get("fps", 16))
     sec = max(0.5, float(target_duration))
@@ -69,7 +109,7 @@ def _values(scene, cfg, target_duration, seed, out_prefix, frames, width, height
     if my_seed == -1:
         my_seed = (abs(int(seed or 0)) * 7919 + int(time.time()) % 9973) % 2**31
     return {
-        "PROMPT": compose_prompt(scene, cfg),
+        "PROMPT": compose_prompt(scene, cfg, character=character),
         "NEGATIVE": v.get("negative_prompt") or "",
         "WIDTH": int(width), "HEIGHT": int(height),
         "FRAMES": int(frames), "FPS": int(fps),
@@ -83,7 +123,8 @@ def _values(scene, cfg, target_duration, seed, out_prefix, frames, width, height
     }
 
 
-def _comfyui(scene, out_path, cfg, target_duration, progress, seed, reference_image, attempt):
+def _comfyui(scene, out_path, cfg, target_duration, progress, seed, reference_image, attempt,
+             character=False):
     v = cfg.get("video", {})
     host = v.get("comfy_host") or "http://127.0.0.1:8188"
     client = ComfyUIClient(host)
@@ -101,7 +142,8 @@ def _comfyui(scene, out_path, cfg, target_duration, progress, seed, reference_im
     except Exception as e:
         return {"ok": False, "engine": "comfyui", "reason": f"workflow: {e}"}
     prefix = "ai_studio/" + os.path.splitext(os.path.basename(out_path))[0]
-    values = _values(scene, cfg, target_duration, seed, prefix, frames, w, h)
+    values = _values(scene, cfg, target_duration, seed, prefix, frames, w, h,
+                     character=character or scene.get("_character_in_shot"))
     if reference_image and "{{START_IMAGE}}" in str(template):
         try:
             up = client.upload_image(reference_image)
@@ -151,7 +193,27 @@ def _comfyui(scene, out_path, cfg, target_duration, progress, seed, reference_im
             "applied": report.get("used"), "target_duration": float(target_duration)}
 
 
-def previz_clip(scene, out_path, cfg, target_duration, progress=None, seed=0):
+def _still_clip(image, scene, out_path, cfg, plan, total, progress, seed):
+    """A picture + existing Ken Burns helper = the illustration visual source."""
+    from .. import media
+    from ..util import media_duration
+
+    v = cfg.get("video", {})
+    ensure_dir(os.path.dirname(out_path) or ".")
+    try:
+        media.make_silent_video_from_image(
+            image, out_path, duration=max(0.8, float(total)),
+            width=int(v.get("width", 480)), height=int(v.get("height", 854)),
+            fps=min(24, int(v.get("fps", 16)) + 4), motion="kenburns")
+        return {"ok": True, "engine": "kenburns", "path": out_path, "duration": total,
+                "width": int(v.get("width", 480)), "height": int(v.get("height", 854)),
+                "fps": int(v.get("fps", 16)), "still_image": os.path.basename(image),
+                "prompt": compose_prompt(scene, cfg), "target_duration": float(total)}
+    except Exception as e:
+        return {"ok": False, "engine": "kenburns", "reason": f"still clip failed: {str(e)[:200]}"}
+
+
+def previz_clip(scene, out_path, cfg, target_duration, progress=None, seed=0, character=False):
     """CPU-only animated clip — the draft / Machine-B / OOM-fallback renderer."""
     v = cfg.get("video", {})
     ensure_dir(os.path.dirname(out_path) or ".")
@@ -163,7 +225,7 @@ def previz_clip(scene, out_path, cfg, target_duration, progress=None, seed=0):
             mood_tag=scene.get("mood_tag") or "", visual_prompt=scene.get("visual_prompt") or "",
             seed=int(seed or 0), motion=float(v.get("motion_strength", 0.75)),
             progress=progress)
-        info["prompt"] = compose_prompt(scene, cfg)
+        info["prompt"] = compose_prompt(scene, cfg, character=character)
         info["duration"] = media_duration(out_path, info.get("duration", 0.0))
         info["target_duration"] = float(target_duration)
         info["engine"] = "previz"
@@ -212,13 +274,18 @@ def clip_capacity_sec(cfg):
 
 
 def render_scene_clip(scene, out_path, cfg, plan, target_duration, progress=None, seed=0,
-                      reference_image=None):
+                      reference_image=None, still_image=None, character=False):
     """Whole-scene picture, chunked when the clip budget is shorter than the scene.
 
-    An 8GB card gives ~5s per Wan clip at 480p while a narrated scene is often
-    8-12s, so we render up to `max_clips` sequential clips (different seeds, the
-    same prompt/mood) and concatenate them. Previz chunks the same way, which keeps
-    the two paths' behaviour identical.
+    ``still_image``: a ready-made picture (Director's upload or an illustration
+    generation) — the scene becomes a Ken Burns clip instead of a model render.
+    ``character``: a character is on screen → pose phrase in the prompt (and
+    I2V start frame when a reference image is available).
+
+    Chunking: an 8GB card gives ~5s per Wan clip at 480p while a narrated scene
+    is often 8-12s, so we render up to `max_clips` sequential clips (different
+    seeds, same prompt/mood) and concatenate them. Previz chunks the same way,
+    keeping the two paths' behaviour identical.
     """
     from ..media import concat_clips
     from ..util import ensure_dir, media_duration
@@ -226,9 +293,11 @@ def render_scene_clip(scene, out_path, cfg, plan, target_duration, progress=None
     cap = clip_capacity_sec(cfg)
     total = max(0.6, float(target_duration))
     n_clips = 1 if total <= cap * 1.05 else min(6, int(-(-total // cap)))
+    if still_image:
+        return _still_clip(still_image, scene, out_path, cfg, plan, total, progress, seed)
     if n_clips <= 1:
         return render(scene, out_path, cfg, plan, total, progress=progress, seed=seed,
-                      reference_image=reference_image)
+                      reference_image=reference_image, character=character)
     per = total / float(n_clips)
     parts, notes, engines, prompts = [], [], set(), []
     ensure_dir(os.path.dirname(out_path) or ".")
@@ -244,7 +313,8 @@ def render_scene_clip(scene, out_path, cfg, plan, target_duration, progress=None
                 progress(_lo + (_hi - _lo) * max(0.0, min(100.0, float(pct))) / 100.0,
                          f"clip {_c + 1}/{n_clips} · {note}")
         res = render(scene, part, cfg, plan, per, progress=cb, seed=int(seed or 0) + c * 101,
-                     reference_image=reference_image if c == 0 else None)
+                     reference_image=reference_image if c == 0 else None,
+                     character=character)
         if res.get("ok") and os.path.exists(part):
             parts.append(part)
             engines.add(str(res.get("engine")))
