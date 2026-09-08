@@ -477,6 +477,9 @@ def validate_plan(plan):
 def fallback_plan(idea, target_dur, character_name, mode="standard", content_goal="explain_one"):
     """Deterministic template plan — used when Ollama is offline or a model
     returns garbage. Still produces a real, well-structured, goal-aware video plan."""
+    import re
+    is_khmer = bool(re.search(r"[\u1780-\u17FF]", idea))
+    
     n = max(2, min(5, int(round(target_dur / 6))))
     dur_each = round(target_dur / n, 2)
     idea_l = idea[:90].strip()
@@ -487,49 +490,93 @@ def fallback_plan(idea, target_dur, character_name, mode="standard", content_goa
     sfxes = ["whoosh", "ding", "riser", "boom", "applause"]
     poses = ["point_right", "explain", "think", "point_up", "wave"]
 
-    # Goal-tailored hooks & scripts
-    if content_goal == "compare_two":
-        hooks = ["The Matchup", "Side A Analysis", "Side B Analysis", "Key Differences", "Final Verdict"]
-        scripts = [
-            f"Let's compare two sides when it comes to {idea_l} — which one actually wins?",
-            f"On one hand, the first option gives you speed, simplicity, and instant setup.",
-            f"On the other hand, the second option offers power, flexibility, and long-term control.",
-            f"The key difference comes down to what you prioritize most in your daily workflow.",
-            f"Here is the verdict: pick what fits your goal today. Follow for more quick comparisons!",
-        ]
-    elif content_goal == "top_list":
-        hooks = ["Top Highlights", "Number One", "Number Two", "The Winner", "Final Summary"]
-        scripts = [
-            f"Here are the top things you need to know about {idea_l} right now.",
-            f"Coming in at number one: the core foundation that fixes the biggest headache.",
-            f"Number two: the hidden shortcut that saves you hours every single week.",
-            f"And the overall winner: the single feature that changes the whole game.",
-            f"Save this video for later and follow for the next top breakdown!",
-        ]
-    elif content_goal == "story":
-        hooks = ["The Beginning", "The Shift", "The Climax", "The Lesson", "The Takeaway"]
-        scripts = [
-            f"It all started when {idea_l} seemed completely impossible to solve.",
-            f"Then came a sudden realization that flipped the whole strategy upside down.",
-            f"That was the breakthrough moment when everything finally clicked into place.",
-            f"The biggest lesson learned: simple focus beats complicated effort every time.",
-            f"That is the whole story. Hit follow if you want to hear more insights like this!",
-        ]
-    else:  # explain_one
-        hooks = ["The Concept", "Core Explanation", "Deep Breakdown", "Real Example", "Key Summary"]
-        scripts = [
-            f"Stop scrolling — {idea_l} is about to make total sense in the next few seconds.",
-            f"Most people get {idea_l} completely wrong, and it costs them time every single day.",
-            f"Here is the part that changes everything about {idea_l} — pay close attention to this.",
-            f"Watch how quickly this works once you know the trick — no excuses left.",
-            f"That is the whole secret. If this helped, follow for more like this — see you in the next one!",
-        ]
+    if is_khmer:
+        if content_goal == "compare_two":
+            hooks = ["ការប្រៀបធៀប", "ភាគីទីមួយ A", "ភាគីទីពីរ B", "ភាពខុសគ្នា", "ការសន្និដ្ឋាន"]
+            scripts = [
+                f"សូមធ្វើការប្រៀបធៀបរវាងជម្រើសទាំងពីរលើ {idea_l} តើមួយណាប្រសើរជាង?",
+                f"ចំពោះជម្រើសទីមួយ ផ្តល់នូវភាពរហ័សរហួន និងការកំណត់យ៉ាងងាយស្រួល។",
+                f"ឯជម្រើសទីពីរ ផ្តល់នូវថាមពល និងភាពបត់បែនខ្ពស់សម្រាប់ប្រៀបធៀប។",
+                f"ភាពខុសគ្នាសំខាន់គឺអាស្រ័យលើតម្រូវការប្រើប្រាស់ជាក់ស្តែងរបស់អ្នក។",
+                f"នេះជាការសន្និដ្ឋាន៖ ជ្រើសរើសអ្វីដែលសមស្របបំផុត។ ចុច Follow សម្រាប់ព័ត៌មានបន្ថែម!",
+            ]
+        elif content_goal == "top_list":
+            hooks = ["ចំណុចសំខាន់", "លេខមួយ", "លេខពីរ", "ជ័យលាភី", "ការសង្ខេប"]
+            scripts = [
+                f"នេះជាចំណុចសំខាន់ៗដែលអ្នកត្រូវដឹងអំពី {idea_l} នៅថ្ងៃនេះ។",
+                f"ចំណាត់ថ្នាក់លេខមួយ៖ ជាមូលដ្ឋានគ្រឹះដោះស្រាយបញ្ហាប្រឈមធំបំផុត។",
+                f"ចំណាត់ថ្នាក់លេខពីរ៖ ជាវិធីសាស្ត្រកាត់បន្ថយពេលវេលាយ៉ាងច្រើន។",
+                f"និងជ័យលាភីចុងក្រោយ៖ គឺជាលក្ខណៈពិសេសដែលផ្លាស់ប្តូរអ្វីៗទាំងអស់។",
+                f"រក្សាទុកវីដេអូនេះ និងចុច Follow សម្រាប់ចំណុចល្អៗជាច្រើនទៀត!",
+            ]
+        elif content_goal == "story":
+            hooks = ["ចំណុចចាប់ផ្តើម", "ការផ្លាស់ប្តូរ", "ចំណុចកំពូល", "មេរៀនទទួលបាន", "ការសន្និដ្ឋាន"]
+            scripts = [
+                f"រឿងរ៉ាវបានចាប់ផ្តើមនៅពេលដែល {idea_l} មើលទៅដូចជាពិបាកដោះស្រាយ។",
+                f"បន្ទាប់មកមានការយល់ឃើញថ្មីមួយ ដែលបានផ្លាស់ប្តូរយុទ្ធសាស្ត្រទាំងស្រុង។",
+                f"នោះជាចំណុចរបត់ដ៏សំខាន់ ដែលអ្វីៗទាំងអស់បានដំណើរការយ៉ាងរលូន។",
+                f"មេរៀនសំខាន់បំផុតគឺ៖ ការផ្តោតអារម្មណ៍ចំគោលដៅ ឈ្នះការប្រឹងប្រែងស្មុគស្មាញ។",
+                f"នេះជារឿងរ៉ាវទាំងស្រុង។ ចុច Follow ដើម្បីទទួលបានគំនិតល្អៗបន្ថែម!",
+            ]
+        else:  # explain_one
+            hooks = ["គំនិតដើម", "ការពន្យល់", "ការវិភាគស៊ីជម្រៅ", "ឧទាហរណ៍ជាក់ស្តែង", "សេចក្តីសង្ខេប"]
+            scripts = [
+                f"សូមរង់ចាំបន្តិច — {idea_l} នឹងត្រូវបកស្រាយយ៉ាងច្បាស់ក្នុងពេលបន្តិចទៀតនេះ។",
+                f"មនុស្សភាគច្រើនយល់ច្រឡំលើ {idea_l} ដែលធ្វើឱ្យខាតបង់ពេលវេលារាល់ថ្ងៃ។",
+                f"នេះជាចំណុចសំខាន់ដែលផ្លាស់ប្តូរការយល់ដឹងអំពី {idea_l} សូមតាមដាន។",
+                f"មើលថាតើវាដំណើរការលឿនប៉ុណ្ណា នៅពេលអ្នកស្គាល់វិធីសាស្ត្រត្រឹមត្រូវ។",
+                f"នេះជាសេចក្តីសង្ខេបទាំងស្រុង។ ប្រសិនបើមានប្រយោជន៍ ចុច Follow ទាំងអស់គ្នា!",
+            ]
+    else:
+        if content_goal == "compare_two":
+            hooks = ["The Matchup", "Side A Analysis", "Side B Analysis", "Key Differences", "Final Verdict"]
+            scripts = [
+                f"Let's compare two sides when it comes to {idea_l} — which one actually wins?",
+                f"On one hand, the first option gives you speed, simplicity, and instant setup.",
+                f"On the other hand, the second option offers power, flexibility, and long-term control.",
+                f"The key difference comes down to what you prioritize most in your daily workflow.",
+                f"Here is the verdict: pick what fits your goal today. Follow for more quick comparisons!",
+            ]
+        elif content_goal == "top_list":
+            hooks = ["Top Highlights", "Number One", "Number Two", "The Winner", "Final Summary"]
+            scripts = [
+                f"Here are the top things you need to know about {idea_l} right now.",
+                f"Coming in at number one: the core foundation that fixes the biggest headache.",
+                f"Number two: the hidden shortcut that saves you hours every single week.",
+                f"And the overall winner: the single feature that changes the whole game.",
+                f"Save this video for later and follow for the next top breakdown!",
+            ]
+        elif content_goal == "story":
+            hooks = ["The Beginning", "The Shift", "The Climax", "The Lesson", "The Takeaway"]
+            scripts = [
+                f"It all started when {idea_l} seemed completely impossible to solve.",
+                f"Then came a sudden realization that flipped the whole strategy upside down.",
+                f"That was the breakthrough moment when everything finally clicked into place.",
+                f"The biggest lesson learned: simple focus beats complicated effort every time.",
+                f"That is the whole story. Hit follow if you want to hear more insights like this!",
+            ]
+        else:  # explain_one
+            hooks = ["The Concept", "Core Explanation", "Deep Breakdown", "Real Example", "Key Summary"]
+            scripts = [
+                f"Stop scrolling — {idea_l} is about to make total sense in the next few seconds.",
+                f"Most people get {idea_l} completely wrong, and it costs them time every single day.",
+                f"Here is the part that changes everything about {idea_l} — pay close attention to this.",
+                f"Watch how quickly this works once you know the trick — no excuses left.",
+                f"That is the whole secret. If this helped, follow for more like this — see you in the next one!",
+            ]
 
     for i in range(n):
-        script = scripts[4] if i == n - 1 else scripts[i % len(scripts)]
+        # Match hook and script to index; last scene gets final hook/CTA
+        if i == n - 1:
+            hk = hooks[-1]
+            sc_text = scripts[-1]
+        else:
+            hk = hooks[min(i, len(hooks) - 2)]
+            sc_text = scripts[min(i, len(scripts) - 2)]
+
         scenes.append({
-            "hook": hooks[i % len(hooks)],
-            "script": script,
+            "hook": hk,
+            "script": sc_text,
             "sfx": sfxes[i % len(sfxes)],
             "sfx_time": 0.3,
             "animation": anims[i % len(anims)],
@@ -539,7 +586,7 @@ def fallback_plan(idea, target_dur, character_name, mode="standard", content_goa
             "image": {
                 "needed": mode == "explain",
                 "source": "web",
-                "query_or_prompt": hooks[i % len(hooks)],
+                "query_or_prompt": hk,
                 "position": "top",
                 "url": ""
             },

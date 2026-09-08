@@ -87,14 +87,16 @@ def write_srt(scene_word_timings, scene_starts, path):
     with open(path, "w", encoding="utf-8") as f:
         for si, wt in enumerate(scene_word_timings):
             base = scene_starts[si]
+            max_end = scene_starts[si + 1] if si + 1 < len(scene_starts) else float('inf')
             # group into 3-word phrases
             for j in range(0, len(wt), 3):
                 group = wt[j:j + 3]
                 s = base + group[0]["start"]
-                e = base + group[-1]["end"]
-                text = " ".join(g["word"] for g in group)
-                f.write(f"{idx}\n{fmt(s)} --> {fmt(e)}\n{text}\n\n")
-                idx += 1
+                e = min(base + group[-1]["end"], max_end)
+                if e > s:
+                    text = " ".join(g["word"] for g in group)
+                    f.write(f"{idx}\n{fmt(s)} --> {fmt(e)}\n{text}\n\n")
+                    idx += 1
 
 
 # ------------------------------ backgrounds ------------------------------

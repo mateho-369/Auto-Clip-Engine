@@ -127,13 +127,38 @@ def _procedural_ai_illustration(query, w=640, h=480):
     cv2.rectangle(img, (20, 20), (w - 20, h - 20), (255, 255, 255), 2, cv2.LINE_AA)
     cv2.circle(img, (w // 2, h // 2 - 20), int(min(w, h) * 0.28), (255, 255, 255), 3, cv2.LINE_AA)
 
-    # Render topic query label
-    text = query.upper()[:28]
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    (tw, th), _ = cv2.getTextSize(text, font, 0.8, 2)
-    tx = int((w - tw) / 2)
-    ty = int(h // 2 + 10)
-    cv2.putText(img, text, (tx + 2, ty + 2), font, 0.8, (0, 0, 0), 4, cv2.LINE_AA)
-    cv2.putText(img, text, (tx, ty), font, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+    # Render topic query label using PIL if non-ASCII (Khmer)
+    text = query[:28]
+    has_non_ascii = any(ord(c) > 127 for c in text)
+
+    if has_non_ascii:
+        from PIL import Image, ImageDraw, ImageFont
+        pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(pil_img)
+        font = None
+        for font_path in ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]:
+            if os.path.exists(font_path):
+                try:
+                    font = ImageFont.truetype(font_path, 26)
+                    break
+                except Exception:
+                    pass
+        if font is None:
+            font = ImageFont.load_default()
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw = bbox[2] - bbox[0]
+        tx = int((w - tw) / 2)
+        ty = int(h // 2 - 10)
+        draw.text((tx + 2, ty + 2), text, font=font, fill=(0, 0, 0))
+        draw.text((tx, ty), text, font=font, fill=(255, 255, 255))
+        img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    else:
+        text = text.upper()
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        (tw, th), _ = cv2.getTextSize(text, font, 0.8, 2)
+        tx = int((w - tw) / 2)
+        ty = int(h // 2 + 10)
+        cv2.putText(img, text, (tx + 2, ty + 2), font, 0.8, (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.putText(img, text, (tx, ty), font, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
 
     return img

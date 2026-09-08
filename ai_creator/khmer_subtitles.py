@@ -3,6 +3,7 @@
 Ensures Khmer captions never break inside a grapheme cluster or consonant stack
 (e.g., separating base consonant from subscript coeng or vowels).
 """
+import os
 import re
 import cv2
 import numpy as np
@@ -106,7 +107,6 @@ def render_caption_frame(frame, words_timing, t, template_key="classic_yellow", 
     """Renders captions on frame according to the chosen subtitle template."""
     tmpl = SUBTITLE_TEMPLATES.get(template_key, SUBTITLE_TEMPLATES["classic_yellow"])
     h, w = frame.shape[:2]
-    font = cv2.FONT_HERSHEY_SIMPLEX
 
     if not words_timing:
         return frame
@@ -130,6 +130,79 @@ def render_caption_frame(frame, words_timing, t, template_key="classic_yellow", 
     end_w = min(len(words_timing), active_idx + 2)
     phrase = words_timing[start_w:end_w]
 
+    text_to_draw = " ".join(wt["word"] for wt in phrase)
+
+    # Check if text contains non-ASCII (e.g. Khmer)
+    has_non_ascii = any(ord(c) > 127 for c in text_to_draw)
+
+    if has_non_ascii:
+        from PIL import Image, ImageDraw, ImageFont
+        
+        # Convert BGR OpenCV frame to RGB PIL Image
+        pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(pil_img)
+
+        # Load font (prioritize bundled Khmer TTF fonts in ai_creator/fonts/)
+        font_size = int(24 * tmpl.get("font_scale", 1.0))
+        font = None
+        fonts_dir = os.path.join(os.path.dirname(__file__), "fonts")
+        font_candidates = [
+            os.path.join(fonts_dir, "KhmerOS.ttf"),
+            os.path.join(fonts_dir, "NotoSansKhmer.ttf"),
+            os.path.join(fonts_dir, "Battambang-Regular.ttf"),
+            "/usr/share/fonts/truetype/khmeros/KhmerOS.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ]
+        for font_path in font_candidates:
+            if os.path.exists(font_path):
+                try:
+                    font = ImageFont.truetype(font_path, font_size)
+                    break
+                except Exception:
+                    pass
+        if font is None:
+            font = ImageFont.load_default()
+
+        # Calculate bounding box
+        bbox = draw.textbbox((0, 0), text_to_draw, font=font)
+        total_w = bbox[2] - bbox[0]
+        total_h = bbox[3] - bbox[1]
+
+        x = int((w - total_w) / 2)
+        y = int(h * 0.85)
+
+        # Draw background box if enabled
+        if tmpl.get("bg_box"):
+            pad_x, pad_y = 16, 12
+            box_x1 = max(10, x - pad_x)
+            box_y1 = max(10, y - pad_y)
+            box_x2 = min(w - 10, x + total_w + pad_x)
+            box_y2 = min(h - 10, y + total_h + pad_y + 4)
+            bg_color = tmpl.get("bg_color", (20, 20, 24, 180))
+            # Color RGB for PIL
+            r, g, b = bg_color[2], bg_color[1], bg_color[0]
+            draw.rectangle([box_x1, box_y1, box_x2, box_y2], fill=(r, g, b))
+
+        # Active phrase rendering
+        active_color = tmpl.get("active_color", (0, 230, 255))
+        r_act, g_act, b_act = active_color[2], active_color[1], active_color[0]
+
+        # Draw stroke/shadow
+        stroke_color = tmpl.get("stroke_color", (0, 0, 0))
+        r_str, g_str, b_str = stroke_color[2], stroke_color[1], stroke_color[0]
+
+        for dx, dy in [(-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (1, 1)]:
+            draw.text((x + dx, y + dy), text_to_draw, font=font, fill=(r_str, g_str, b_str))
+
+        draw.text((x, y), text_to_draw, font=font, fill=(r_act, g_act, b_act))
+
+        # Convert back to OpenCV BGR frame
+        res_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+        np.copyto(frame, res_bgr)
+        return frame
+
+    # Standard ASCII rendering with OpenCV
+    font = cv2.FONT_HERSHEY_SIMPLEX
     scale = max(0.8, (w / 800) * tmpl.get("font_scale", 1.0))
     thickness = tmpl.get("thickness", 3)
 
