@@ -163,10 +163,21 @@ def render_caption_frame(frame, words_timing, t, template_key="classic_yellow", 
         if font is None:
             font = ImageFont.load_default()
 
+<<<<<<< HEAD
         # Calculate bounding box
         bbox = draw.textbbox((0, 0), text_to_draw, font=font)
         total_w = bbox[2] - bbox[0]
         total_h = bbox[3] - bbox[1]
+=======
+        # Measure each word in phrase for word-level karaoke highlight
+        word_widths = []
+        for wt in phrase:
+            wb = draw.textbbox((0, 0), wt["word"], font=font)
+            word_widths.append(wb[2] - wb[0])
+        
+        total_w = sum(word_widths) + 12 * (len(phrase) - 1)
+        total_h = max((draw.textbbox((0, 0), wt["word"], font=font)[3] - draw.textbbox((0, 0), wt["word"], font=font)[1]) for wt in phrase) if phrase else 30
+>>>>>>> 1d610cf (Implement word-level karaoke highlighting in PIL rendering for Khmer subtitles)
 
         x = int((w - total_w) / 2)
         y = int(h * 0.85)
@@ -183,6 +194,7 @@ def render_caption_frame(frame, words_timing, t, template_key="classic_yellow", 
             r, g, b = bg_color[2], bg_color[1], bg_color[0]
             draw.rectangle([box_x1, box_y1, box_x2, box_y2], fill=(r, g, b))
 
+<<<<<<< HEAD
         # Active phrase rendering
         active_color = tmpl.get("active_color", (0, 230, 255))
         r_act, g_act, b_act = active_color[2], active_color[1], active_color[0]
@@ -195,6 +207,26 @@ def render_caption_frame(frame, words_timing, t, template_key="classic_yellow", 
             draw.text((x + dx, y + dy), text_to_draw, font=font, fill=(r_str, g_str, b_str))
 
         draw.text((x, y), text_to_draw, font=font, fill=(r_act, g_act, b_act))
+=======
+        # Render phrase words with individual active / text color highlights!
+        x_curr = x
+        stroke_color = tmpl.get("stroke_color", (0, 0, 0))
+        r_str, g_str, b_str = stroke_color[2], stroke_color[1], stroke_color[0]
+
+        for i, wt in enumerate(phrase):
+            word = wt["word"]
+            is_active = (start_w + i == active_idx)
+            color = tmpl["active_color"] if is_active else tmpl["text_color"]
+            r_c, g_c, b_c = color[2], color[1], color[0]
+
+            # Draw stroke/shadow
+            for dx, dy in [(-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (1, 1)]:
+                draw.text((x_curr + dx, y + dy), word, font=font, fill=(r_str, g_str, b_str))
+
+            # Draw word in active or text color
+            draw.text((x_curr, y), word, font=font, fill=(r_c, g_c, b_c))
+            x_curr += word_widths[i] + 12
+>>>>>>> 1d610cf (Implement word-level karaoke highlighting in PIL rendering for Khmer subtitles)
 
         # Convert back to OpenCV BGR frame
         res_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
