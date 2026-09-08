@@ -30,6 +30,7 @@ studio never dead-ends.
 import json
 import time
 import uuid
+import os
 import numpy as np
 
 from .ollama_client import OllamaClient, extract_json
@@ -37,6 +38,8 @@ from .sfx import SFX_LIBRARY
 from .animation import ENTRIES, EXITS
 from .transitions import TRANSITIONS
 from .team import ROLES, ROLE_LABELS
+from .character import STANDARD_POSES
+from .image_search import fetch_supporting_image
 
 SFX_CHOICES = list(SFX_LIBRARY.keys()) + ["none"]
 ANIM_CHOICES = list(ENTRIES)
@@ -46,6 +49,10 @@ BG_CHOICES = [
     "solid-dark", "solid-black", "solid-navy",
     "pattern-dots", "pattern-grid",
 ]
+
+CONTENT_GOALS = ["explain_one", "compare_two", "top_list", "story"]
+IMAGE_SOURCES = ["action", "web", "ai"]
+IMAGE_POSITIONS = ["top", "side", "behind", "pip"]
 
 BG_COLORS = {
     "gradient-violet": ((88, 44, 160), (28, 12, 60)),      # BGR top/bottom
@@ -252,27 +259,41 @@ class Studio:
         return plan
 
     # ------------------------------ main entry ------------------------------
-    def plan(self, idea, target_dur=25, style="", character_name=""):
+    def plan(self, idea, target_dur=25, style="", character_name="", mode="standard",
+             content_goal="explain_one", sfx_enabled=True, character_id="",
+             character_store=None, work_dir="work"):
         t0 = time.time()
         idea = (idea or "").strip() or "a fun short video about my channel"
         target_dur = max(8, min(90, int(target_dur or 25)))
+        mode = "explain" if str(mode).lower().strip() == "explain" else "standard"
+        content_goal = content_goal if content_goal in CONTENT_GOALS else "explain_one"
 
         skeleton = self._plan_skeleton(idea, target_dur, style, character_name)
         if skeleton is None:
-            plan = fallback_plan(idea, target_dur, character_name)
+            plan = fallback_plan(idea, target_dur, character_name, mode=mode, content_goal=content_goal)
             self._log("planner", "fallback", None, "template plan generated (no AI available)")
         else:
             plan = {
                 "title": str(skeleton.get("title") or f"{character_name or 'Creator'} short"),
                 "logline": str(skeleton.get("logline") or ""),
+                "mode": mode,
+                "content_goal": content_goal,
+                "sfx_enabled": bool(sfx_enabled),
                 "scenes": skeleton["scenes"],
             }
+
+        plan["mode"] = mode
+        plan["content_goal"] = content_goal
+        plan["sfx_enabled"] = bool(sfx_enabled)
 
         plan = self._refine_scripts(plan, character_name, idea)
         plan = self._refine_sfx(plan)
         plan = self._refine_anim(plan)
         if self.cfg["roles"].get("qa", {}).get("enabled", False):
             plan = self._qa_pass(plan)
+
+        plan = self._refine_action_and_illustration(plan, character_store=character_store,
+                                                     char_id=character_id, work_dir=work_dir)
 
         plan = validate_plan(plan)
         plan["total_duration"] = round(sum(s["duration"] for s in plan["scenes"]), 2)
@@ -281,11 +302,86 @@ class Studio:
         plan["idea"] = idea
         return plan
 
+    def _refine_action_and_illustration(self, plan, character_store=None, char_id=None, work_dir="work"):
+        """Selects poses and fetches supporting images per scene."""
+        cache_img_dir = os.path.join(work_dir, "assets", "cache", "images") if work_dir else "work/assets/cache/images"
+        for i, sc in enumerate(plan["scenes"]):
+            script_text = sc.get("script", "").lower()
+            hook_text = sc.get("hook", "").lower()
+
+            # Assign fitting pose
+            pose = str(sc.get("pose") or "").lower().strip()
+            if not pose or pose not in STANDARD_POSES:
+                if any(w in script_text or w in hook_text for w in ["look", "see", "this", "here", "check"]):
+                    pose = "point_right"
+                elif any(w in script_text or w in hook_text for w in ["why", "how", "think", "wonder", "reason"]):
+                    pose = "think"
+                elif any(w in script_text or w in hook_text for w in ["top", "first", "best", "up"]):
+                    pose = "point_up"
+                elif any(w in script_text or w in hook_text for w in ["hello", "welcome", "bye", "follow"]):
+                    pose = "wave" if i == len(plan["scenes"]) - 1 else "explain"
+                elif any(w in script_text or w in hook_text for w in ["funny", "haha", "lol"]):
+                    pose = "laugh"
+                elif any(w in script_text or w in hook_text for w in ["sad", "sorry", "bad"]):
+                    pose = "sad"
+                else:
+                    pose = "explain" if i % 2 == 0 else "idle"
+            sc["pose"] = pose
+
+            # Ensure action exists in character store
+            if character_store and char_id:
+                character_store.ensure_action(char_id, pose)
+
+            # Image acquisition
+            img_cfg = sc.get("image", {})
+            if not isinstance(img_cfg, dict):
+                img_cfg = {"needed": True, "source": "web", "query_or_prompt": sc.get("hook") or "concept", "position": "top"}
+            
+            needed = bool(img_cfg.get("needed", plan.get("mode") == "explain"))
+            img_cfg["needed"] = needed
+            if needed:
+                src = str(img_cfg.get("source") or "web").lower().strip()
+                if src not in IMAGE_SOURCES:
+                    src = "web"
+                q = str(img_cfg.get("query_or_prompt") or sc.get("hook") or "illustration")
+                pos = str(img_cfg.get("position") or "top").lower().strip()
+                if pos not in IMAGE_POSITIONS:
+                    pos = "top"
+                
+                fetched = fetch_supporting_image(
+                    source=src,
+                    query_or_prompt=q,
+                    cache_dir=cache_img_dir,
+                    char_id=char_id,
+                    character_store=character_store,
+                    pose=pose,
+                )
+                img_cfg["source"] = src
+                img_cfg["query_or_prompt"] = q
+                img_cfg["position"] = pos
+                img_cfg["url"] = fetched["url"]
+                img_cfg["local_path"] = fetched.get("local_path", "")
+                sc["image"] = img_cfg
+            else:
+                sc["image"] = {"needed": False, "source": "web", "query_or_prompt": "", "position": "top", "url": ""}
+        return plan
+
 
 def validate_plan(plan):
     """Deterministic guard: the result is ALWAYS renderable."""
     if not isinstance(plan, dict) or not isinstance(plan.get("scenes"), list) or not plan["scenes"]:
         raise ValueError("Plan has no scenes.")
+    
+    mode = str(plan.get("mode") or "standard").lower().strip()
+    if mode not in ("standard", "explain"):
+        mode = "standard"
+
+    content_goal = str(plan.get("content_goal") or "explain_one").lower().strip()
+    if content_goal not in CONTENT_GOALS:
+        content_goal = "explain_one"
+
+    sfx_enabled = bool(plan.get("sfx_enabled", True))
+
     scenes = []
     for raw in plan["scenes"]:
         if not isinstance(raw, dict):
@@ -298,9 +394,12 @@ def validate_plan(plan):
         s["duration"] = round(max(2.5, min(12.0, dur)), 2)
         s["hook"] = str(s.get("hook") or "Scene").strip()[:60]
         s["script"] = str(s.get("script") or "").strip()[:500]
-        s["sfx"] = str(s.get("sfx") or "none").lower().strip()
-        if s["sfx"] not in SFX_CHOICES:
-            s["sfx"] = "none"
+        
+        sfx_val = str(s.get("sfx") or "none").lower().strip() if sfx_enabled else "none"
+        if sfx_val not in SFX_CHOICES:
+            sfx_val = "none"
+        s["sfx"] = sfx_val
+
         try:
             s["sfx_time"] = round(max(0.0, min(3.0, float(s.get("sfx_time", 0.3)))), 2)
         except Exception:
@@ -314,7 +413,39 @@ def validate_plan(plan):
         s["background"] = str(s.get("background") or "gradient-violet").lower().strip()
         if s["background"] not in BG_CHOICES:
             s["background"] = "gradient-violet"
+
+        # Pose validation
+        pose_val = str(s.get("pose") or "idle").lower().strip()
+        if pose_val not in STANDARD_POSES:
+            pose_val = "idle"
+        s["pose"] = pose_val
+
+        # Image validation
+        img_raw = s.get("image")
+        if isinstance(img_raw, dict):
+            s["image"] = {
+                "needed": bool(img_raw.get("needed", mode == "explain")),
+                "source": str(img_raw.get("source") or "web").lower().strip(),
+                "query_or_prompt": str(img_raw.get("query_or_prompt") or s["hook"])[:200],
+                "position": str(img_raw.get("position") or "top").lower().strip(),
+                "url": str(img_raw.get("url") or ""),
+                "local_path": str(img_raw.get("local_path") or ""),
+            }
+            if s["image"]["source"] not in IMAGE_SOURCES:
+                s["image"]["source"] = "web"
+            if s["image"]["position"] not in IMAGE_POSITIONS:
+                s["image"]["position"] = "top"
+        else:
+            s["image"] = {
+                "needed": mode == "explain",
+                "source": "web",
+                "query_or_prompt": s["hook"],
+                "position": "top",
+                "url": "",
+            }
+
         scenes.append(s)
+
     if not scenes:
         raise ValueError("Plan has no valid scenes.")
     # back-to-back duplicate SFX -> drop the second
@@ -335,14 +466,20 @@ def validate_plan(plan):
     out = {
         "title": str(plan.get("title") or "Untitled short")[:120],
         "logline": str(plan.get("logline") or "")[:300],
+        "mode": mode,
+        "content_goal": content_goal,
+        "sfx_enabled": sfx_enabled,
         "scenes": scenes[:12],
     }
     return out
 
 
-def fallback_plan(idea, target_dur, character_name):
+def fallback_plan(idea, target_dur, character_name, mode="standard", content_goal="explain_one"):
     """Deterministic template plan — used when Ollama is offline or a model
-    returns garbage. Still produces a real, well-structured video plan."""
+    returns garbage. Still produces a real, well-structured, goal-aware video plan."""
+    import re
+    is_khmer = bool(re.search(r"[\u1780-\u17FF]", idea))
+    
     n = max(2, min(5, int(round(target_dur / 6))))
     dur_each = round(target_dur / n, 2)
     idea_l = idea[:90].strip()
@@ -351,29 +488,115 @@ def fallback_plan(idea, target_dur, character_name):
     anims = ["pop-in", "bounce", "slide-left", "zoom", "slide-right"]
     trans = ["fade", "slide", "zoom", "wipe", "cut"]
     sfxes = ["whoosh", "ding", "riser", "boom", "applause"]
-    hooks = ["The Hook", "The Problem", "The Reveal", "The Proof", "The CTA"]
-    scripts = [
-        f"Stop scrolling — {idea_l} is about to make total sense in the next few seconds.",
-        f"Most people get {idea_l} completely wrong, and it costs them time every single day.",
-        f"Here is the part that changes everything about {idea_l} — pay close attention to this.",
-        f"Watch how quickly this works once you know the trick — no excuses left.",
-        f"That is the whole secret. If this helped, follow for more like this — see you in the next one!",
-    ]
+    poses = ["point_right", "explain", "think", "point_up", "wave"]
+
+    if is_khmer:
+        if content_goal == "compare_two":
+            hooks = ["ការប្រៀបធៀប", "ភាគីទីមួយ A", "ភាគីទីពីរ B", "ភាពខុសគ្នា", "ការសន្និដ្ឋាន"]
+            scripts = [
+                f"សូមធ្វើការប្រៀបធៀបរវាងជម្រើសទាំងពីរលើ {idea_l} តើមួយណាប្រសើរជាង?",
+                f"ចំពោះជម្រើសទីមួយ ផ្តល់នូវភាពរហ័សរហួន និងការកំណត់យ៉ាងងាយស្រួល។",
+                f"ឯជម្រើសទីពីរ ផ្តល់នូវថាមពល និងភាពបត់បែនខ្ពស់សម្រាប់ប្រៀបធៀប។",
+                f"ភាពខុសគ្នាសំខាន់គឺអាស្រ័យលើតម្រូវការប្រើប្រាស់ជាក់ស្តែងរបស់អ្នក។",
+                f"នេះជាការសន្និដ្ឋាន៖ ជ្រើសរើសអ្វីដែលសមស្របបំផុត។ ចុច Follow សម្រាប់ព័ត៌មានបន្ថែម!",
+            ]
+        elif content_goal == "top_list":
+            hooks = ["ចំណុចសំខាន់", "លេខមួយ", "លេខពីរ", "ជ័យលាភី", "ការសង្ខេប"]
+            scripts = [
+                f"នេះជាចំណុចសំខាន់ៗដែលអ្នកត្រូវដឹងអំពី {idea_l} នៅថ្ងៃនេះ។",
+                f"ចំណាត់ថ្នាក់លេខមួយ៖ ជាមូលដ្ឋានគ្រឹះដោះស្រាយបញ្ហាប្រឈមធំបំផុត។",
+                f"ចំណាត់ថ្នាក់លេខពីរ៖ ជាវិធីសាស្ត្រកាត់បន្ថយពេលវេលាយ៉ាងច្រើន។",
+                f"និងជ័យលាភីចុងក្រោយ៖ គឺជាលក្ខណៈពិសេសដែលផ្លាស់ប្តូរអ្វីៗទាំងអស់។",
+                f"រក្សាទុកវីដេអូនេះ និងចុច Follow សម្រាប់ចំណុចល្អៗជាច្រើនទៀត!",
+            ]
+        elif content_goal == "story":
+            hooks = ["ចំណុចចាប់ផ្តើម", "ការផ្លាស់ប្តូរ", "ចំណុចកំពូល", "មេរៀនទទួលបាន", "ការសន្និដ្ឋាន"]
+            scripts = [
+                f"រឿងរ៉ាវបានចាប់ផ្តើមនៅពេលដែល {idea_l} មើលទៅដូចជាពិបាកដោះស្រាយ។",
+                f"បន្ទាប់មកមានការយល់ឃើញថ្មីមួយ ដែលបានផ្លាស់ប្តូរយុទ្ធសាស្ត្រទាំងស្រុង។",
+                f"នោះជាចំណុចរបត់ដ៏សំខាន់ ដែលអ្វីៗទាំងអស់បានដំណើរការយ៉ាងរលូន។",
+                f"មេរៀនសំខាន់បំផុតគឺ៖ ការផ្តោតអារម្មណ៍ចំគោលដៅ ឈ្នះការប្រឹងប្រែងស្មុគស្មាញ។",
+                f"នេះជារឿងរ៉ាវទាំងស្រុង។ ចុច Follow ដើម្បីទទួលបានគំនិតល្អៗបន្ថែម!",
+            ]
+        else:  # explain_one
+            hooks = ["គំនិតដើម", "ការពន្យល់", "ការវិភាគស៊ីជម្រៅ", "ឧទាហរណ៍ជាក់ស្តែង", "សេចក្តីសង្ខេប"]
+            scripts = [
+                f"សូមរង់ចាំបន្តិច — {idea_l} នឹងត្រូវបកស្រាយយ៉ាងច្បាស់ក្នុងពេលបន្តិចទៀតនេះ។",
+                f"មនុស្សភាគច្រើនយល់ច្រឡំលើ {idea_l} ដែលធ្វើឱ្យខាតបង់ពេលវេលារាល់ថ្ងៃ។",
+                f"នេះជាចំណុចសំខាន់ដែលផ្លាស់ប្តូរការយល់ដឹងអំពី {idea_l} សូមតាមដាន។",
+                f"មើលថាតើវាដំណើរការលឿនប៉ុណ្ណា នៅពេលអ្នកស្គាល់វិធីសាស្ត្រត្រឹមត្រូវ។",
+                f"នេះជាសេចក្តីសង្ខេបទាំងស្រុង។ ប្រសិនបើមានប្រយោជន៍ ចុច Follow ទាំងអស់គ្នា!",
+            ]
+    else:
+        if content_goal == "compare_two":
+            hooks = ["The Matchup", "Side A Analysis", "Side B Analysis", "Key Differences", "Final Verdict"]
+            scripts = [
+                f"Let's compare two sides when it comes to {idea_l} — which one actually wins?",
+                f"On one hand, the first option gives you speed, simplicity, and instant setup.",
+                f"On the other hand, the second option offers power, flexibility, and long-term control.",
+                f"The key difference comes down to what you prioritize most in your daily workflow.",
+                f"Here is the verdict: pick what fits your goal today. Follow for more quick comparisons!",
+            ]
+        elif content_goal == "top_list":
+            hooks = ["Top Highlights", "Number One", "Number Two", "The Winner", "Final Summary"]
+            scripts = [
+                f"Here are the top things you need to know about {idea_l} right now.",
+                f"Coming in at number one: the core foundation that fixes the biggest headache.",
+                f"Number two: the hidden shortcut that saves you hours every single week.",
+                f"And the overall winner: the single feature that changes the whole game.",
+                f"Save this video for later and follow for the next top breakdown!",
+            ]
+        elif content_goal == "story":
+            hooks = ["The Beginning", "The Shift", "The Climax", "The Lesson", "The Takeaway"]
+            scripts = [
+                f"It all started when {idea_l} seemed completely impossible to solve.",
+                f"Then came a sudden realization that flipped the whole strategy upside down.",
+                f"That was the breakthrough moment when everything finally clicked into place.",
+                f"The biggest lesson learned: simple focus beats complicated effort every time.",
+                f"That is the whole story. Hit follow if you want to hear more insights like this!",
+            ]
+        else:  # explain_one
+            hooks = ["The Concept", "Core Explanation", "Deep Breakdown", "Real Example", "Key Summary"]
+            scripts = [
+                f"Stop scrolling — {idea_l} is about to make total sense in the next few seconds.",
+                f"Most people get {idea_l} completely wrong, and it costs them time every single day.",
+                f"Here is the part that changes everything about {idea_l} — pay close attention to this.",
+                f"Watch how quickly this works once you know the trick — no excuses left.",
+                f"That is the whole secret. If this helped, follow for more like this — see you in the next one!",
+            ]
+
     for i in range(n):
-        # the last scene always carries the call-to-action
-        script = scripts[4] if i == n - 1 else scripts[i % len(scripts)]
+        # Match hook and script to index; last scene gets final hook/CTA
+        if i == n - 1:
+            hk = hooks[-1]
+            sc_text = scripts[-1]
+        else:
+            hk = hooks[min(i, len(hooks) - 2)]
+            sc_text = scripts[min(i, len(scripts) - 2)]
+
         scenes.append({
-            "hook": hooks[i % len(hooks)],
-            "script": script,
+            "hook": hk,
+            "script": sc_text,
             "sfx": sfxes[i % len(sfxes)],
             "sfx_time": 0.3,
             "animation": anims[i % len(anims)],
             "transition": trans[i % len(trans)],
             "background": bgs[i % len(bgs)],
+            "pose": poses[i % len(poses)],
+            "image": {
+                "needed": mode == "explain",
+                "source": "web",
+                "query_or_prompt": hk,
+                "position": "top",
+                "url": ""
+            },
             "duration": dur_each,
         })
     return {"title": idea_l.title()[:120] or "Creator short",
             "logline": f"Auto-generated template plan for: {idea_l}",
+            "mode": mode,
+            "content_goal": content_goal,
+            "sfx_enabled": True,
             "scenes": scenes}
 
 

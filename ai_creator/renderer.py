@@ -18,6 +18,7 @@ from .sfx import load_sfx
 from .transitions import blend
 from .planner import BG_COLORS
 from .voice import audio_envelope, wav_duration
+from .khmer_subtitles import render_caption_frame
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -43,43 +44,13 @@ def estimate_word_timings(text, clip_duration):
     return timings
 
 
-def draw_captions(frame, words_timing, t, title=None, title_until=2.0):
-    """Karaoke-style captions: 3-word sliding window, active word highlighted."""
+def draw_captions(frame, words_timing, t, title=None, title_until=2.0, template_key="classic_yellow"):
+    """Renders captions using selected subtitle template."""
     h, w = frame.shape[:2]
     if title and t < title_until:
-        _draw_center_text(frame, title, int(h * 0.10), w, scale=1.6,
+        _draw_center_text(frame, title, int(h * 0.10), w, scale=1.4,
                           color=(255, 255, 255), thickness=4, shadow=True)
-    if not words_timing:
-        return frame
-    active = -1
-    for idx, wt in enumerate(words_timing):
-        if wt["start"] <= t <= wt["end"]:
-            active = idx
-            break
-    if active == -1:
-        for idx, wt in enumerate(words_timing):
-            if t < wt["start"]:
-                active = idx
-                break
-    if active == -1:
-        active = len(words_timing) - 1
-    start_w = max(0, active - 1)
-    end_w = min(len(words_timing), active + 2)
-    phrase = words_timing[start_w:end_w]
-    font_scale = max(0.9, w / 900)
-    thickness = 3
-    sizes = [cv2.getTextSize(wt["word"].upper(), FONT, font_scale, thickness)[0] for wt in phrase]
-    total = sum(s[0] for s in sizes) + 14 * (len(phrase) - 1)
-    x = int((w - total) / 2)
-    y = int(h * 0.86)
-    for i, wt in enumerate(phrase):
-        word = wt["word"].upper()
-        is_active = (start_w + i == active)
-        color = (0, 230, 255) if is_active else (255, 255, 255)
-        cv2.putText(frame, word, (x + 2, y + 3), FONT, font_scale, (0, 0, 0), thickness + 4, cv2.LINE_AA)
-        cv2.putText(frame, word, (x, y), FONT, font_scale, color, thickness, cv2.LINE_AA)
-        x += sizes[i][0] + 14
-    return frame
+    return render_caption_frame(frame, words_timing, t, template_key=template_key, title=title)
 
 
 def _draw_center_text(frame, text, y, w, scale=1.0, color=(255, 255, 255), thickness=3, shadow=True):
@@ -116,14 +87,16 @@ def write_srt(scene_word_timings, scene_starts, path):
     with open(path, "w", encoding="utf-8") as f:
         for si, wt in enumerate(scene_word_timings):
             base = scene_starts[si]
+            max_end = scene_starts[si + 1] if si + 1 < len(scene_starts) else float('inf')
             # group into 3-word phrases
             for j in range(0, len(wt), 3):
                 group = wt[j:j + 3]
                 s = base + group[0]["start"]
-                e = base + group[-1]["end"]
-                text = " ".join(g["word"] for g in group)
-                f.write(f"{idx}\n{fmt(s)} --> {fmt(e)}\n{text}\n\n")
-                idx += 1
+                e = min(base + group[-1]["end"], max_end)
+                if e > s:
+                    text = " ".join(g["word"] for g in group)
+                    f.write(f"{idx}\n{fmt(s)} --> {fmt(e)}\n{text}\n\n")
+                    idx += 1
 
 
 # ------------------------------ backgrounds ------------------------------
@@ -165,6 +138,38 @@ def make_particles(w, h, seed=1, count=26):
         "a": int(rng.integers(40, 110)),
         "c": tuple(int(v) for v in rng.integers(120, 220, size=3)),
     } for _ in range(count)]
+
+
+def _composite_supporting_image(frame, supp_img, position="top"):
+    if supp_img is None:
+        return frame
+    h, w = frame.shape[:2]
+
+    if position == "behind":
+        scaled = cv2.resize(supp_img, (w, h), interpolation=cv2.INTER_AREA)
+        dark = np.zeros((h, w, 3), dtype=np.uint8)
+        cv2.addWeighted(scaled, 0.45, dark, 0.55, 0, frame)
+        return frame
+
+    if position == "side":
+        card_w, card_h = int(w * 0.52), int(h * 0.42)
+        x0, y0 = int(w * 0.05), int(h * 0.16)
+    elif position == "pip":
+        card_w, card_h = int(w * 0.46), int(h * 0.32)
+        x0, y0 = int(w * 0.48), int(h * 0.14)
+    else:  # "top"
+        card_w, card_h = int(w * 0.80), int(h * 0.36)
+        x0, y0 = int((w - card_w) / 2), int(h * 0.12)
+
+    x1, y1 = x0 + card_w, y0 + card_h
+    resized = cv2.resize(supp_img, (card_w, card_h), interpolation=cv2.INTER_AREA)
+
+    # Draw card border & place resized image
+    cv2.rectangle(frame, (x0 - 4, y0 - 4), (x1 + 4, y1 + 4), (20, 20, 30), -1)
+    cv2.rectangle(frame, (x0 - 2, y0 - 2), (x1 + 2, y1 + 2), (255, 255, 255), 2)
+    frame[y0:y1, x0:x1] = resized
+
+    return frame
 
 
 def draw_particles(bg, particles, t):
@@ -232,15 +237,17 @@ class Renderer:
         os.makedirs(work_dir, exist_ok=True)
 
     def render(self, plan, character_dir, tts, voice_cfg, width=720, height=1280,
-               fps=24, out_dir="outputs", progress=None):
+               fps=24, out_dir="outputs", progress=None, subtitle_template="classic_yellow"):
         """Runs the full render. Returns result dict with file names."""
         def prog(stage, pct):
             if progress:
                 progress(stage, pct)
 
         os.makedirs(out_dir, exist_ok=True)
-        char_rgba = load_character_rgba(os.path.join(character_dir, "avatar.png"))
+        char_rgba_default = load_character_rgba(os.path.join(character_dir, "avatar.png"))
         scenes = plan["scenes"]
+        mode = plan.get("mode", "standard")
+        sfx_enabled = plan.get("sfx_enabled", True)
 
         # ---------- stage 1: narration (TTS) ----------
         prog("voice", 3)
@@ -272,7 +279,7 @@ class Renderer:
             wt = estimate_word_timings(sc["script"], dur if not narr_dur else min(dur, narr_dur + 0.3))
             word_timings_all.append(wt)
             sfx_samples, sfx_sr = (None, 0)
-            if sc.get("sfx", "none") != "none":
+            if sfx_enabled and sc.get("sfx", "none") != "none":
                 sfx_samples, sfx_sr = load_sfx(self.sfx_dir, sc["sfx"])
             scene_audios.append({"narration": None, "sfx": None, "start": 0.0,
                                  "_narr_wav": narr_wav if ok else None,
@@ -306,12 +313,6 @@ class Renderer:
             scene_audios[i].pop("_narr_wav", None)
 
         # ---------- stage 2: frames per scene ----------
-        char_h = int(height * 0.52)
-        char_w = int(char_h * char_rgba.shape[1] / char_rgba.shape[0])
-        char_base = cv2.resize(char_rgba, (char_w, char_h), interpolation=cv2.INTER_AREA)
-        cx = width // 2
-        cy = int(height * 0.60)
-
         scene_files = []
         for i, sc in enumerate(scenes):
             prog(f"render scene {i + 1}/{len(scenes)}", 20 + int(55 * i / len(scenes)))
@@ -322,25 +323,89 @@ class Renderer:
             bg = make_background(sc["background"], width, height, seed=i + 1)
             particles = make_particles(width, height, seed=i * 7 + 3)
             env = scene_audios[i].get("_env")
+
+            # Load pose image or default character
+            pose_name = sc.get("pose", "idle")
+            actions_dir = os.path.join(character_dir, "actions")
+            pose_path = os.path.join(actions_dir, f"{pose_name}.png")
+            if os.path.exists(pose_path):
+                char_rgba = load_character_rgba(pose_path)
+            else:
+                char_rgba = char_rgba_default
+
+            # Supporting image loading
+            supp_img = None
+            img_cfg = sc.get("image", {})
+            if img_cfg and img_cfg.get("needed"):
+                img_path = img_cfg.get("local_path")
+                if not img_path or not os.path.exists(img_path):
+                    url = img_cfg.get("url", "")
+                    if url.startswith("/assets/cache/"):
+                        # Handle both /assets/cache/images/xxx.png and /assets/cache/xxx.png
+                        fname = os.path.basename(url)
+                        img_path = os.path.join(self.work_dir, "assets", "cache", "images", fname)
+                        if not os.path.exists(img_path):
+                            img_path = os.path.join(self.work_dir, url.lstrip("/"))
+                    elif url.startswith("/assets/characters/"):
+                        parts = url.split("/")
+                        if len(parts) >= 4:
+                            img_path = os.path.join(os.path.dirname(character_dir), *parts[3:])
+                if img_path and os.path.exists(img_path):
+                    raw = cv2.imread(img_path, cv2.IMREAD_COLOR)
+                    if raw is not None:
+                        supp_img = raw
+
+            # Character size & anchor position
+            if mode == "explain":
+                if supp_img is not None:
+                    char_h = int(height * 0.46)
+                    cx = int(width * 0.72)
+                    cy = int(height * 0.68)
+                else:
+                    char_h = int(height * 0.52)
+                    cx = width // 2
+                    cy = int(height * 0.62)
+            else:
+                char_h = int(height * 0.52)
+                cx = width // 2
+                cy = int(height * 0.60)
+
+            char_w = int(char_h * char_rgba.shape[1] / max(1, char_rgba.shape[0]))
+            char_base = cv2.resize(char_rgba, (char_w, char_h), interpolation=cv2.INTER_AREA)
+
             for f in range(n_frames):
                 t = f / fps
                 frame = bg.copy()
                 draw_particles(frame, particles, t)
-                # transform
-                if t < ENTRY_DUR:
-                    scale, ox, oy, alpha = entry_state(sc["animation"], t)
-                elif t > durations[i] - EXIT_DUR and i == len(scenes) - 1:
-                    scale, ox, oy, alpha = exit_state("fade-out", t - (durations[i] - EXIT_DUR))
+
+                # Draw supporting image in Explain Mode
+                if mode == "explain" and supp_img is not None:
+                    pos = img_cfg.get("position", "top")
+                    frame = _composite_supporting_image(frame, supp_img, pos)
+
+                # Transform & character compositing
+                if mode == "explain":
+                    # Explain mode presenter stays planted, subtle talk-pulse and idle bob
+                    scale, ox, oy, alpha = 1.0, 0.0, idle_bob(t + i) * 0.3, 1.0
                 else:
-                    scale, ox, oy, alpha = 1.0, 0.0, idle_bob(t + i), 1.0
+                    if t < ENTRY_DUR:
+                        scale, ox, oy, alpha = entry_state(sc["animation"], t)
+                    elif t > durations[i] - EXIT_DUR and i == len(scenes) - 1:
+                        scale, ox, oy, alpha = exit_state("fade-out", t - (durations[i] - EXIT_DUR))
+                    else:
+                        scale, ox, oy, alpha = 1.0, 0.0, idle_bob(t + i), 1.0
+
                 if env is not None:
                     ei = min(int(t * fps), len(env) - 1)
                     scale *= talk_pulse(float(env[ei]))
+
                 frame = composite_rgba(frame, char_base, cx, cy, scale, ox, oy, alpha)
-                # captions (scene-local time)
+
+                # Captions with chosen template
                 frame = draw_captions(
                     frame, word_timings_all[i], t,
                     title=plan.get("title") if i == 0 else None, title_until=2.0,
+                    template_key=subtitle_template
                 )
                 writer.write(frame)
             writer.release()

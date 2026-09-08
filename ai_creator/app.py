@@ -20,11 +20,13 @@ from typing import Optional as Opt
 
 from ai_creator.team import load_config, save_config, normalize_config, ROLES, ROLE_LABELS, ROLE_DESCRIPTIONS
 from ai_creator.ollama_client import OllamaClient
-from ai_creator.planner import Studio, fallback_plan, new_plan_id, validate_plan
-from ai_creator.character import CharacterStore
+from ai_creator.planner import Studio, fallback_plan, new_plan_id, validate_plan, CONTENT_GOALS
+from ai_creator.character import CharacterStore, STANDARD_POSES
 from ai_creator.voice import VoiceStore, TTSEngine
 from ai_creator.renderer import Renderer
 from ai_creator import sfx as sfx_mod
+from ai_creator.image_search import fetch_supporting_image
+from ai_creator.khmer_subtitles import SUBTITLE_TEMPLATES
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -248,6 +250,84 @@ async def api_character_asset(char_id: str, asset: str):
     return FileResponse(path, media_type="image/png")
 
 
+# --------------------------- character actions ---------------------------
+@app.get("/api/characters/{char_id}/actions")
+async def api_character_actions_get(char_id: str):
+    prof = CHARACTERS.get(char_id)
+    if prof is None:
+        raise HTTPException(404, "Character not found.")
+    return CHARACTERS.get_actions(char_id)
+
+
+@app.post("/api/characters/{char_id}/actions")
+async def api_character_actions_post(char_id: str, pose: str = Form(...), file: Opt[UploadFile] = File(None)):
+    prof = CHARACTERS.get(char_id)
+    if prof is None:
+        raise HTTPException(404, "Character not found.")
+    pose = pose.lower().strip().replace(" ", "_")
+    if file:
+        ext = os.path.splitext(file.filename or "")[1].lower()
+        if ext not in (".jpg", ".jpeg", ".png", ".webp"):
+            raise HTTPException(400, "Image required.")
+        tmp = os.path.join(WORK_DIR, f"pose_{uuid.uuid4().hex[:6]}{ext}")
+        with open(tmp, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+        out_path = CHARACTERS.add_action(char_id, pose, tmp, source="uploaded")
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    else:
+        out_path = CHARACTERS.ensure_action(char_id, pose)
+    return {"status": "success", "pose": pose, "url": f"/assets/characters/{char_id}/actions/{pose}.png"}
+
+
+@app.get("/assets/characters/{char_id}/actions/{pose}.png")
+async def api_character_action_asset(char_id: str, pose: str):
+    prof = CHARACTERS.get(char_id)
+    if prof is None:
+        raise HTTPException(404, "Character not found.")
+    out_path = CHARACTERS.ensure_action(char_id, pose)
+    if not out_path or not os.path.exists(out_path):
+        raise HTTPException(404, "Pose image missing.")
+    return FileResponse(out_path, media_type="image/png")
+
+
+@app.get("/assets/cache/images/{filename}")
+async def api_cached_image_asset(filename: str):
+    if "/" in filename or "\\" in filename or filename.startswith("."):
+        raise HTTPException(400, "Invalid filename.")
+    path = os.path.join(WORK_DIR, "assets", "cache", "images", filename)
+    if not os.path.exists(path):
+        raise HTTPException(404, "Image asset missing.")
+    return FileResponse(path, media_type="image/png")
+
+
+# --------------------------- image search & subtitle templates ---------------------------
+class ImageSearchRequest(BaseModel):
+    source: str = "web"
+    query_or_prompt: str = ""
+    char_id: Opt[str] = None
+    pose: str = "idle"
+
+
+@app.post("/api/images/search")
+async def api_image_search(req: ImageSearchRequest):
+    cache_dir = os.path.join(WORK_DIR, "assets", "cache", "images")
+    res = fetch_supporting_image(
+        source=req.source,
+        query_or_prompt=req.query_or_prompt,
+        cache_dir=cache_dir,
+        char_id=req.char_id,
+        character_store=CHARACTERS,
+        pose=req.pose,
+    )
+    return res
+
+
+@app.get("/api/subtitle-templates")
+async def api_subtitle_templates():
+    return SUBTITLE_TEMPLATES
+
+
 @app.get("/assets/voices/{voice_id}/preview.wav")
 async def api_voice_preview(voice_id: str):
     meta = VOICES.get(voice_id)
@@ -324,17 +404,23 @@ async def api_sfx_play(name: str):
 
 # ----------------------------- planning -----------------------------
 class PlanRequest(BaseModel):
-    idea: str
+    idea: str = ""
     target_duration: int = 25
     style: str = ""
     character_id: Opt[str] = None
+    mode: str = "standard"               # "standard" | "explain"
+    operating_mode: str = "auto"         # "manual" | "auto"
+    content_goal: str = "explain_one"    # "explain_one" | "compare_two" | "top_list" | "story"
+    sfx_enabled: bool = True
 
 
 @app.post("/api/plan")
 async def api_plan(req: PlanRequest):
     idea = (req.idea or "").strip()
-    if not idea:
+    if not idea and req.operating_mode != "manual":
         raise HTTPException(400, "Describe your video idea first.")
+    if not idea:
+        idea = "A fun short presentation"
     char = CHARACTERS.get(req.character_id) if req.character_id else None
     if char is None:
         raise HTTPException(400, "Pick a character first — the video stars your character.")
@@ -342,7 +428,11 @@ async def api_plan(req: PlanRequest):
     cfg = team_config()
     client = ollama_client()
     studio = Studio(cfg, client)
-    plan = studio.plan(idea, req.target_duration, req.style, char.get("name", ""))
+    plan = studio.plan(
+        idea, req.target_duration, req.style, char.get("name", ""),
+        mode=req.mode, content_goal=req.content_goal, sfx_enabled=req.sfx_enabled,
+        character_id=char["id"], character_store=CHARACTERS, work_dir=WORK_DIR
+    )
     plan_id = new_plan_id()
     plan["id"] = plan_id
     plan["character_id"] = char["id"]
@@ -355,6 +445,9 @@ async def api_plan(req: PlanRequest):
 class PlanUpdateModel(BaseModel):
     title: Opt[str] = None
     logline: Opt[str] = None
+    mode: Opt[str] = None
+    content_goal: Opt[str] = None
+    sfx_enabled: Opt[bool] = None
     scenes: List[dict] = []
 
 
@@ -369,6 +462,12 @@ async def api_plan_update(plan_id: str, req: PlanUpdateModel):
         plan["title"] = req.title[:120]
     if req.logline is not None:
         plan["logline"] = req.logline[:300]
+    if req.mode is not None:
+        plan["mode"] = req.mode
+    if req.content_goal is not None:
+        plan["content_goal"] = req.content_goal
+    if req.sfx_enabled is not None:
+        plan["sfx_enabled"] = req.sfx_enabled
     if req.scenes:
         plan["scenes"] = req.scenes
     try:
@@ -390,6 +489,7 @@ class RenderRequest(BaseModel):
     plan_id: str
     voice_id: Opt[str] = None
     kokoro_voice: str = "af_bella"
+    subtitle_template: str = "classic_yellow"
     width: int = 720
     height: int = 1280
 
@@ -409,6 +509,7 @@ def perform_render(job_id, req: RenderRequest, plan, char, voice_meta):
             plan, char["dir"], TTS, voice_cfg,
             width=req.width, height=req.height, fps=24,
             out_dir=OUTPUTS_DIR, progress=progress,
+            subtitle_template=req.subtitle_template,
         )
         # keep a per-render copy so downloads don't collide
         run_dir = os.path.join(OUTPUTS_DIR, f"render_{job_id}")
