@@ -339,7 +339,11 @@ class Renderer:
                 if not img_path or not os.path.exists(img_path):
                     url = img_cfg.get("url", "")
                     if url.startswith("/assets/cache/"):
-                        img_path = os.path.join(self.work_dir, url.replace("/assets/cache/", ""))
+                        # Handle both /assets/cache/images/xxx.png and /assets/cache/xxx.png
+                        fname = os.path.basename(url)
+                        img_path = os.path.join(self.work_dir, "assets", "cache", "images", fname)
+                        if not os.path.exists(img_path):
+                            img_path = os.path.join(self.work_dir, url.lstrip("/"))
                     elif url.startswith("/assets/characters/"):
                         parts = url.split("/")
                         if len(parts) >= 4:

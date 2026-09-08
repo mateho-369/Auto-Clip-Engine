@@ -429,6 +429,7 @@ def validate_plan(plan):
                 "query_or_prompt": str(img_raw.get("query_or_prompt") or s["hook"])[:200],
                 "position": str(img_raw.get("position") or "top").lower().strip(),
                 "url": str(img_raw.get("url") or ""),
+                "local_path": str(img_raw.get("local_path") or ""),
             }
             if s["image"]["source"] not in IMAGE_SOURCES:
                 s["image"]["source"] = "web"
@@ -475,7 +476,7 @@ def validate_plan(plan):
 
 def fallback_plan(idea, target_dur, character_name, mode="standard", content_goal="explain_one"):
     """Deterministic template plan — used when Ollama is offline or a model
-    returns garbage. Still produces a real, well-structured video plan."""
+    returns garbage. Still produces a real, well-structured, goal-aware video plan."""
     n = max(2, min(5, int(round(target_dur / 6))))
     dur_each = round(target_dur / n, 2)
     idea_l = idea[:90].strip()
@@ -485,16 +486,46 @@ def fallback_plan(idea, target_dur, character_name, mode="standard", content_goa
     trans = ["fade", "slide", "zoom", "wipe", "cut"]
     sfxes = ["whoosh", "ding", "riser", "boom", "applause"]
     poses = ["point_right", "explain", "think", "point_up", "wave"]
-    hooks = ["The Hook", "The Problem", "The Reveal", "The Proof", "The CTA"]
-    scripts = [
-        f"Stop scrolling — {idea_l} is about to make total sense in the next few seconds.",
-        f"Most people get {idea_l} completely wrong, and it costs them time every single day.",
-        f"Here is the part that changes everything about {idea_l} — pay close attention to this.",
-        f"Watch how quickly this works once you know the trick — no excuses left.",
-        f"That is the whole secret. If this helped, follow for more like this — see you in the next one!",
-    ]
+
+    # Goal-tailored hooks & scripts
+    if content_goal == "compare_two":
+        hooks = ["The Matchup", "Side A Analysis", "Side B Analysis", "Key Differences", "Final Verdict"]
+        scripts = [
+            f"Let's compare two sides when it comes to {idea_l} — which one actually wins?",
+            f"On one hand, the first option gives you speed, simplicity, and instant setup.",
+            f"On the other hand, the second option offers power, flexibility, and long-term control.",
+            f"The key difference comes down to what you prioritize most in your daily workflow.",
+            f"Here is the verdict: pick what fits your goal today. Follow for more quick comparisons!",
+        ]
+    elif content_goal == "top_list":
+        hooks = ["Top Highlights", "Number One", "Number Two", "The Winner", "Final Summary"]
+        scripts = [
+            f"Here are the top things you need to know about {idea_l} right now.",
+            f"Coming in at number one: the core foundation that fixes the biggest headache.",
+            f"Number two: the hidden shortcut that saves you hours every single week.",
+            f"And the overall winner: the single feature that changes the whole game.",
+            f"Save this video for later and follow for the next top breakdown!",
+        ]
+    elif content_goal == "story":
+        hooks = ["The Beginning", "The Shift", "The Climax", "The Lesson", "The Takeaway"]
+        scripts = [
+            f"It all started when {idea_l} seemed completely impossible to solve.",
+            f"Then came a sudden realization that flipped the whole strategy upside down.",
+            f"That was the breakthrough moment when everything finally clicked into place.",
+            f"The biggest lesson learned: simple focus beats complicated effort every time.",
+            f"That is the whole story. Hit follow if you want to hear more insights like this!",
+        ]
+    else:  # explain_one
+        hooks = ["The Concept", "Core Explanation", "Deep Breakdown", "Real Example", "Key Summary"]
+        scripts = [
+            f"Stop scrolling — {idea_l} is about to make total sense in the next few seconds.",
+            f"Most people get {idea_l} completely wrong, and it costs them time every single day.",
+            f"Here is the part that changes everything about {idea_l} — pay close attention to this.",
+            f"Watch how quickly this works once you know the trick — no excuses left.",
+            f"That is the whole secret. If this helped, follow for more like this — see you in the next one!",
+        ]
+
     for i in range(n):
-        # the last scene always carries the call-to-action
         script = scripts[4] if i == n - 1 else scripts[i % len(scripts)]
         scenes.append({
             "hook": hooks[i % len(hooks)],
