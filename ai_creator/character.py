@@ -709,6 +709,7 @@ def _prepare_rgb_square_image(avatar_rgba, target_size=512, bg_color=(240, 240, 
     return resized
 
 
+# Note: Unverified against a live API key (DALL-E 2 edits needs mask/alpha). Deterministic matrix transform is default fallback.
 def _call_hosted_pose_transfer_api(avatar_rgba, pose_desc, api_key, work_dir="work"):
     """Hosted pose transfer API implementation (e.g. OpenAI Images Edit / Replicate).
 
