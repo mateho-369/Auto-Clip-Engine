@@ -30,6 +30,12 @@ _REPO_CASCADE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__f
                              "src", "haarcascade_frontalface_default.xml")
 
 
+STANDARD_POSES = [
+    "idle", "point_left", "point_right", "point_up", "explain",
+    "think", "wave", "laugh", "sleep", "eat", "sad", "surprised"
+]
+
+
 class CharacterStore:
     def __init__(self, root):
         self.root = os.path.join(root, "characters")
@@ -40,6 +46,12 @@ class CharacterStore:
 
     def _profile_path(self, char_id):
         return os.path.join(self._dir(char_id), "profile.json")
+
+    def _actions_dir(self, char_id):
+        return os.path.join(self._dir(char_id), "actions")
+
+    def _actions_json_path(self, char_id):
+        return os.path.join(self._dir(char_id), "actions.json")
 
     def list(self):
         out = []
@@ -68,6 +80,104 @@ class CharacterStore:
         os.makedirs(os.path.dirname(self._profile_path(prof["id"])), exist_ok=True)
         with open(self._profile_path(prof["id"]), "w", encoding="utf-8") as f:
             json.dump(prof, f, indent=2, ensure_ascii=False)
+
+    def get_actions(self, char_id):
+        prof = self.get(char_id)
+        if prof is None:
+            return {"actions": {}, "available_poses": STANDARD_POSES}
+        actions_file = self._actions_json_path(char_id)
+        actions = {}
+        if os.path.exists(actions_file):
+            try:
+                with open(actions_file, "r", encoding="utf-8") as f:
+                    actions = json.load(f)
+            except Exception:
+                actions = {}
+        
+        actions_dir = self._actions_dir(char_id)
+        os.makedirs(actions_dir, exist_ok=True)
+
+        # Ensure idle action exists if avatar.png exists
+        avatar_path = os.path.join(self._dir(char_id), "avatar.png")
+        idle_path = os.path.join(actions_dir, "idle.png")
+        if "idle" not in actions or not os.path.exists(idle_path):
+            if os.path.exists(avatar_path):
+                shutil.copyfile(avatar_path, idle_path)
+                actions["idle"] = {"path": "actions/idle.png", "source": "uploaded", "created": time.time()}
+                self._save_actions(char_id, actions)
+
+        # Filter out missing files
+        valid_actions = {}
+        for pose, meta in actions.items():
+            full_path = os.path.join(self._dir(char_id), meta.get("path", f"actions/{pose}.png"))
+            if os.path.exists(full_path):
+                valid_actions[pose] = meta
+
+        return {"actions": valid_actions, "available_poses": STANDARD_POSES}
+
+    def _save_actions(self, char_id, actions):
+        p = self._actions_json_path(char_id)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(actions, f, indent=2, ensure_ascii=False)
+
+    def add_action(self, char_id, pose_name, img_path_or_data, source="uploaded"):
+        prof = self.get(char_id)
+        if prof is None:
+            return None
+        pose_name = pose_name.lower().strip().replace(" ", "_")
+        actions_dir = self._actions_dir(char_id)
+        os.makedirs(actions_dir, exist_ok=True)
+        out_path = os.path.join(actions_dir, f"{pose_name}.png")
+
+        if isinstance(img_path_or_data, str):
+            if os.path.exists(img_path_or_data):
+                img = cv2.imread(img_path_or_data, cv2.IMREAD_UNCHANGED)
+                if img is not None:
+                    if img.shape[2] == 3:
+                        img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+                    cv2.imwrite(out_path, img)
+                else:
+                    shutil.copyfile(img_path_or_data, out_path)
+        elif isinstance(img_path_or_data, np.ndarray):
+            cv2.imwrite(out_path, img_path_or_data)
+
+        actions_info = self.get_actions(char_id)["actions"]
+        actions_info[pose_name] = {
+            "path": f"actions/{pose_name}.png",
+            "source": source,
+            "created": time.time()
+        }
+        self._save_actions(char_id, actions_info)
+        return out_path
+
+    def ensure_action(self, char_id, pose_name, prompt=""):
+        pose_name = pose_name.lower().strip().replace(" ", "_")
+        if not pose_name:
+            pose_name = "idle"
+        prof = self.get(char_id)
+        if prof is None:
+            return None
+        actions_info = self.get_actions(char_id)["actions"]
+        if pose_name in actions_info:
+            full_path = os.path.join(self._dir(char_id), actions_info[pose_name]["path"])
+            if os.path.exists(full_path):
+                return full_path
+
+        # Need to generate missing pose fallback
+        avatar_path = os.path.join(self._dir(char_id), "avatar.png")
+        if not os.path.exists(avatar_path):
+            return None
+        
+        avatar_rgba = cv2.imread(avatar_path, cv2.IMREAD_UNCHANGED)
+        if avatar_rgba is None:
+            return None
+        if avatar_rgba.shape[2] == 3:
+            avatar_rgba = cv2.cvtColor(avatar_rgba, cv2.COLOR_BGR2BGRA)
+
+        pose_img = generate_pose_fallback(avatar_rgba, pose_name)
+        out_path = self.add_action(char_id, pose_name, pose_img, source="generated")
+        return out_path
 
     def create(self, name, photo_path):
         char_id = str(uuid.uuid4())[:8]
@@ -176,7 +286,16 @@ class CharacterStore:
         cv2.imwrite(os.path.join(self._dir(prof["id"]), "face.png"), face_crop)
         # avatar.png — the on-screen render asset (body + face, feathered)
         avatar = make_avatar(img, face, max_h=640)
-        cv2.imwrite(os.path.join(self._dir(prof["id"]), "avatar.png"), avatar)
+        avatar_path = os.path.join(self._dir(prof["id"]), "avatar.png")
+        cv2.imwrite(avatar_path, avatar)
+        # Ensure actions/idle.png also exists
+        actions_dir = self._actions_dir(prof["id"])
+        os.makedirs(actions_dir, exist_ok=True)
+        idle_path = os.path.join(actions_dir, "idle.png")
+        cv2.imwrite(idle_path, avatar)
+        actions = self.get_actions(prof["id"])["actions"]
+        actions["idle"] = {"path": "actions/idle.png", "source": "uploaded", "created": time.time()}
+        self._save_actions(prof["id"], actions)
 
 
 def detect_face(img):
@@ -309,6 +428,354 @@ def make_avatar(img, face, max_h=640):
     x1 = min(rgba.shape[1], x1 + pad)
     y1 = min(rgba.shape[0], y1 + pad)
     return rgba[y0:y1, x0:x1]
+
+
+def generate_pose_fallback(avatar_rgba, pose_name, prompt=""):
+    """Generates a transparent RGBA pose image for a character.
+
+    Attempts real AI image generation (via local ComfyUI at http://localhost:8188
+    or local image generation endpoint) using reference character + pose prompt.
+    If no AI image model is reachable, falls back to deterministic pose-synthesis.
+    """
+    if avatar_rgba is None:
+        return None
+    pose = (pose_name or "idle").lower().strip()
+
+    # 1. Attempt AI Image Generation / ComfyUI pose transfer if server is online
+    ai_pose_img = _try_generate_ai_pose_image(avatar_rgba, pose)
+    if ai_pose_img is not None:
+        return ai_pose_img
+
+    # 2. Deterministic pose-synthesis fallback when AI image server is offline
+    img = avatar_rgba.copy()
+    h, w = img.shape[:2]
+
+    if pose in ("idle", "explain"):
+        return img
+
+    if pose == "point_left":
+        return cv2.flip(img, 1)
+
+    if pose == "point_right":
+        M = cv2.getRotationMatrix2D((w // 2, h // 2), -5, 1.0)
+        return cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+
+    if pose == "point_up":
+        M = np.float32([[1, 0, 0], [0, 1, -int(h * 0.05)]])
+        return cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+
+    if pose == "think":
+        M = cv2.getRotationMatrix2D((w // 2, int(h * 0.7)), -8, 0.98)
+        return cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+
+    if pose == "wave":
+        M = cv2.getRotationMatrix2D((w // 2, int(h * 0.7)), 6, 1.0)
+        return cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+
+    if pose == "laugh":
+        M = cv2.getRotationMatrix2D((w // 2, h // 2), -3, 1.05)
+        return cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+
+    if pose == "sleep":
+        M = cv2.getRotationMatrix2D((w // 2, h // 2), -18, 0.95)
+        return cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+
+    if pose in ("sad", "surprised", "eat"):
+        angle = -6 if pose == "sad" else (8 if pose == "surprised" else 4)
+        scale = 0.96 if pose == "sad" else 1.06
+        M = cv2.getRotationMatrix2D((w // 2, h // 2), angle, scale)
+        return cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+
+    return img
+
+
+def _try_generate_ai_pose_image(avatar_rgba, pose, prompt="", work_dir="work"):
+    """Generates an identity-locked pose image using the character's reference avatar image.
+
+    1. Attempts reference-conditioned image-to-image pose transfer in ComfyUI (:8188)
+       by uploading the reference avatar image, encoding it via VAEEncode with controlled
+       denoise (0.45) so face, outfit, and color palette stay strictly fixed.
+    2. Supports hosted image API endpoints (e.g. OpenAI / Replicate pose transfer API) if
+       API keys are configured in environment.
+    3. If no image generation model/endpoint is reachable, returns None so execution
+       falls back gracefully.
+    """
+    if avatar_rgba is None:
+        return None
+
+    pose_desc = pose.replace("_", " ")
+
+    # --- PATH A: Hosted Image API with Reference Image (if API key set) ---
+    api_key = os.environ.get("POSE_TRANSFER_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    if api_key:
+        try:
+            hosted_img = _call_hosted_pose_transfer_api(avatar_rgba, pose_desc, api_key, work_dir)
+            if hosted_img is not None:
+                return hosted_img
+        except Exception as e:
+            print(f"Hosted pose transfer API skipped: {e}")
+
+    # --- PATH B: Local ComfyUI Image-to-Image / Reference-Locked Pose Transfer ---
+    try:
+        import urllib.request
+        import json
+        import time
+
+        # Probe ComfyUI health
+        probe_req = urllib.request.Request("http://localhost:8188/system_stats", headers={"User-Agent": "AutoClipEngine"})
+        with urllib.request.urlopen(probe_req, timeout=1) as resp:
+            if resp.status != 200:
+                return None
+
+        # 1. Save reference avatar image to temporary file
+        os.makedirs(work_dir, exist_ok=True)
+        ref_filename = "ref_character.png"
+        ref_path = os.path.join(work_dir, ref_filename)
+        cv2.imwrite(ref_path, avatar_rgba)
+
+        # 2. Upload reference image to ComfyUI (/upload/image)
+        with open(ref_path, "rb") as f:
+            img_bytes = f.read()
+
+        boundary = "----WebKitFormBoundaryAutoClipEngine"
+        body = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="image"; filename="{ref_filename}"\r\n'
+            f"Content-Type: image/png\r\n\r\n"
+        ).encode("utf-8") + img_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+        up_req = urllib.request.Request(
+            "http://localhost:8188/upload/image",
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}", "User-Agent": "AutoClipEngine"}
+        )
+        with urllib.request.urlopen(up_req, timeout=4) as uresp:
+            up_data = json.loads(uresp.read().decode("utf-8"))
+            uploaded_name = up_data.get("name", ref_filename)
+
+        # 3. Construct Image-to-Image / Reference-Locked Workflow Graph
+        # Uses LoadImage -> VAEEncode with controlled denoise (0.45) so identity is locked
+        positive_prompt = f"same character in {pose_desc} pose, same person, same face, same outfit and clothes, isolated standing presenter portrait, clean white background"
+        negative_prompt = "different person, different face, different clothes, watermark, text, ugly, deformed, dark background"
+
+        workflow = {
+            "1": {
+                "inputs": {
+                    "image": uploaded_name,
+                    "upload": "image"
+                },
+                "class_type": "LoadImage"
+            },
+            "2": {
+                "inputs": {
+                    "pixels": ["1", 0],
+                    "vae": ["4", 2]
+                },
+                "class_type": "VAEEncode"
+            },
+            "3": {
+                "inputs": {
+                    "seed": int(time.time() * 1000) % 1000000,
+                    "steps": 20,
+                    "cfg": 6.5,
+                    "sampler_name": "euler",
+                    "scheduler": "normal",
+                    "denoise": 0.45,  # Controlled denoise: 55% structure/identity locked, 45% pose shift
+                    "model": ["4", 0],
+                    "positive": ["6", 0],
+                    "negative": ["7", 0],
+                    "latent_image": ["2", 0]  # Latent encoded directly from reference character avatar image!
+                },
+                "class_type": "KSampler"
+            },
+            "4": {
+                "inputs": {
+                    "ckpt_name": "v1-5-pruned-emaonly.safetensors"
+                },
+                "class_type": "CheckpointLoaderSimple"
+            },
+            "6": {
+                "inputs": {
+                    "text": positive_prompt,
+                    "clip": ["4", 1]
+                },
+                "class_type": "CLIPTextEncode"
+            },
+            "7": {
+                "inputs": {
+                    "text": negative_prompt,
+                    "clip": ["4", 1]
+                },
+                "class_type": "CLIPTextEncode"
+            },
+            "8": {
+                "inputs": {
+                    "samples": ["3", 0],
+                    "vae": ["4", 2]
+                },
+                "class_type": "VAEDecode"
+            },
+            "9": {
+                "inputs": {
+                    "filename_prefix": "pose_gen_ref",
+                    "images": ["8", 0]
+                },
+                "class_type": "SaveImage"
+            }
+        }
+
+        # Submit workflow prompt
+        data = json.dumps({"prompt": workflow}).encode("utf-8")
+        req = urllib.request.Request("http://localhost:8188/prompt", data=data, headers={"Content-Type": "application/json", "User-Agent": "AutoClipEngine"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            res_data = json.loads(resp.read().decode("utf-8"))
+            prompt_id = res_data.get("prompt_id")
+
+        if not prompt_id:
+            return None
+
+        # Poll history for output
+        output_filename = None
+        for _ in range(30):
+            time.sleep(1)
+            hist_req = urllib.request.Request(f"http://localhost:8188/history/{prompt_id}", headers={"User-Agent": "AutoClipEngine"})
+            with urllib.request.urlopen(hist_req, timeout=2) as hresp:
+                hdata = json.loads(hresp.read().decode("utf-8"))
+                if prompt_id in hdata:
+                    outputs = hdata[prompt_id].get("outputs", {})
+                    for node_id, node_out in outputs.items():
+                        images = node_out.get("images", [])
+                        if images:
+                            output_filename = images[0].get("filename")
+                            break
+            if output_filename:
+                break
+
+        if not output_filename:
+            return None
+
+        # Download output image
+        view_url = f"http://localhost:8188/view?filename={output_filename}&subfolder=&type=output"
+        vreq = urllib.request.Request(view_url, headers={"User-Agent": "AutoClipEngine"})
+        with urllib.request.urlopen(vreq, timeout=5) as vresp:
+            img_bytes = vresp.read()
+            img_array = np.asarray(bytearray(img_bytes), dtype=np.uint8)
+            bgr_img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+
+        if bgr_img is None:
+            return None
+
+        # Perform background removal to get transparent RGBA cutout
+        rgba_img = make_avatar(bgr_img, face=None, max_h=640)
+        return rgba_img
+
+    except Exception as e:
+        print(f"ComfyUI reference pose generation offline/skipped: {e}")
+        return None
+
+
+def _prepare_rgb_square_image(avatar_rgba, target_size=512, bg_color=(240, 240, 240)):
+    """Converts a transparent RGBA character cutout into a solid 1:1 square RGB image.
+
+    Prevents APIs (like OpenAI / DALL-E) from misinterpreting alpha transparency
+    channels as edit mask regions, and ensures strict 1:1 square image input compliance.
+    Uses neutral light gray background (default (240,240,240)) to prevent white clothes
+    from bleeding into pure white backgrounds.
+    """
+    if avatar_rgba is None:
+        return None
+
+    h, w = avatar_rgba.shape[:2]
+    max_dim = max(h, w)
+
+    # 1. Create solid neutral background square canvas
+    square = np.full((max_dim, max_dim, 3), bg_color, dtype=np.uint8)
+
+    # 2. Composite RGBA character onto solid square center
+    x_off = (max_dim - w) // 2
+    y_off = (max_dim - h) // 2
+
+    if avatar_rgba.shape[2] == 4:
+        alpha = avatar_rgba[:, :, 3] / 255.0
+        for c in range(3):
+            square[y_off:y_off+h, x_off:x_off+w, c] = (
+                avatar_rgba[:, :, c] * alpha + square[y_off:y_off+h, x_off:x_off+w, c] * (1 - alpha)
+            ).astype(np.uint8)
+    else:
+        square[y_off:y_off+h, x_off:x_off+w] = avatar_rgba[:, :, :3]
+
+    # 3. Resize to target_size x target_size
+    resized = cv2.resize(square, (target_size, target_size), interpolation=cv2.INTER_AREA)
+    return resized
+
+
+def _call_hosted_pose_transfer_api(avatar_rgba, pose_desc, api_key, work_dir="work"):
+    """Hosted pose transfer API implementation (e.g. OpenAI Images Edit / Replicate).
+
+    Pre-processes character into a solid 1:1 square RGB image (no alpha mask confusion)
+    and sends to hosted image API with identity-preserving prompt, returning transparent RGBA cutout.
+    """
+    if avatar_rgba is None or not api_key:
+        return None
+
+    try:
+        import urllib.request
+        import json
+
+        # Save solid 1:1 square RGB reference image (no alpha mask confusion!)
+        os.makedirs(work_dir, exist_ok=True)
+        rgb_square = _prepare_rgb_square_image(avatar_rgba, target_size=512)
+        ref_path = os.path.join(work_dir, "ref_api_square.png")
+        cv2.imwrite(ref_path, rgb_square)
+
+        # OpenAI Image Variations / Edits API Path
+        prompt = f"full figure presenter portrait of the exact same character performing {pose_desc} pose, same face, same clothes, isolated clean background"
+
+        boundary = "----WebKitFormBoundaryAutoClipEngineHosted"
+        with open(ref_path, "rb") as f:
+            img_bytes = f.read()
+
+        body = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="image"; filename="ref_api_square.png"\r\n'
+            f"Content-Type: image/png\r\n\r\n"
+        ).encode("utf-8") + img_bytes + (
+            f"\r\n--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="prompt"\r\n\r\n'
+            f"{prompt}\r\n"
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="n"\r\n\r\n1\r\n'
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="size"\r\n\r\n512x512\r\n'
+            f"--{boundary}--\r\n"
+        ).encode("utf-8")
+
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/images/edits",
+            data=body,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "User-Agent": "AutoClipEngine"
+            }
+        )
+
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            urls = data.get("data", [])
+            if urls and "url" in urls[0]:
+                img_url = urls[0]["url"]
+                vreq = urllib.request.Request(img_url, headers={"User-Agent": "AutoClipEngine"})
+                with urllib.request.urlopen(vreq, timeout=8) as vresp:
+                    img_array = np.asarray(bytearray(vresp.read()), dtype=np.uint8)
+                    bgr_img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                    if bgr_img is not None:
+                        return make_avatar(bgr_img, face=None, max_h=640)
+
+    except Exception as e:
+        print(f"Hosted pose transfer API call failed: {e}")
+
+    return None
 
 
 def analyze_photo(path):

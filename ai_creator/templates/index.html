@@ -3,46 +3,78 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI Content Creator — Local Studio</title>
+<title>AI Content Creator — Creative Studio</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
+<body class="studio-dark">
+
+<!-- TOP TOOLBAR -->
 <header class="topbar">
   <div class="brand">
     <div class="brand-logo">✦</div>
     <div>
       <div class="brand-name">AI Content Creator</div>
-      <div class="brand-sub">Local AI + Bot Video Studio</div>
+      <div class="brand-sub">Local AI Video Studio</div>
     </div>
   </div>
-  <div class="status-pills">
-    <span id="pill-ollama" class="pill pill-off">Ollama — checking…</span>
-    <span id="pill-tts" class="pill pill-off">Voice — checking…</span>
-    <span class="pill pill-local">100% local</span>
+
+  <div class="toolbar-center">
+    <!-- MODE TOGGLES -->
+    <div class="segmented-control" id="mode-toggle">
+      <button class="seg-btn active" data-mode="explain">Presenter (Explain)</button>
+      <button class="seg-btn" data-mode="standard">Animated (Standard)</button>
+    </div>
+
+    <div class="segmented-control" id="op-mode-toggle">
+      <button class="seg-btn active" data-op="auto">🤖 Auto AI</button>
+      <button class="seg-btn" data-op="manual">✍️ Manual</button>
+    </div>
+
+    <!-- GOAL PICKER -->
+    <select id="select-goal" class="select-sm">
+      <option value="explain_one" selected>🎯 Explain One Thing</option>
+      <option value="compare_two">⚖️ Compare Two Things</option>
+      <option value="top_list">🔢 Top List / Countdown</option>
+      <option value="story">📖 Story / Narrative</option>
+    </select>
+  </div>
+
+  <div class="toolbar-right">
+    <!-- SFX TOGGLE -->
+    <button class="btn btn-icon active" id="btn-sfx-toggle" title="Toggle Sound Effects">🔊 SFX ON</button>
+    
+    <!-- UNDO / REDO -->
+    <button class="btn btn-icon" id="btn-undo" title="Undo (Ctrl+Z)">↩</button>
+    <button class="btn btn-icon" id="btn-redo" title="Redo (Ctrl+Y)">↪</button>
+
+    <div class="status-pills">
+      <span id="pill-ollama" class="pill pill-off">Ollama</span>
+      <span id="pill-tts" class="pill pill-off">TTS</span>
+    </div>
   </div>
 </header>
 
+<!-- NAVIGATION STEPS -->
 <nav class="steps" id="steps">
   <button class="step active" data-step="1"><span class="step-num">1</span> Character</button>
   <button class="step" data-step="2"><span class="step-num">2</span> AI Team</button>
-  <button class="step" data-step="3"><span class="step-num">3</span> Create</button>
+  <button class="step active-editor" data-step="3"><span class="step-num">3</span> Studio Editor</button>
   <button class="step" data-step="4"><span class="step-num">4</span> Render</button>
 </nav>
 
-<main>
+<main class="workspace">
   <!-- ============ STEP 1: CHARACTER ============ -->
   <section class="panel" id="panel-1">
     <div class="panel-head">
-      <h1>Your Character</h1>
-      <p>Train your on-screen character from photos. The studio <b>remembers its face and body</b> —
-      every new video re-uses the exact same character.</p>
+      <h1>Your On-Screen Character</h1>
+      <p>Upload photos to train your persistent presenter character. Face regions and transparent cutouts are remembered on disk.</p>
     </div>
 
     <div id="char-create" class="card dropzone-card">
       <div class="dz" id="dz-create">
         <div class="dz-icon">📸</div>
-        <div class="dz-title">Drop a photo of your character here</div>
-        <div class="dz-sub">Person, drawing, avatar or mascot — JPG / PNG / WEBP</div>
+        <div class="dz-title">Drop character photo here</div>
+        <div class="dz-sub">Person, avatar, drawing, mascot (JPG / PNG / WEBP)</div>
         <label class="btn btn-ghost">Browse files<input type="file" id="file-create" accept="image/*" hidden></label>
       </div>
       <div class="row" style="margin-top:14px">
@@ -52,15 +84,11 @@
       </div>
     </div>
 
-    <div id="char-list" class="char-grid" style="display:none">
-      <!-- character cards injected here -->
-    </div>
+    <div id="char-list" class="char-grid" style="display:none"></div>
 
     <div class="card" style="margin-top:18px">
-      <h2>🎙️ Voice — human-like, yours</h2>
-      <p class="muted">Upload a <b>30–60 second recording of your voice</b> (or use the mic).
-      When the local <b>XTTS v2</b> clone engine is installed it clones that exact voice.
-      Otherwise Kokoro-82M / gTTS are used automatically.</p>
+      <h2>🎙️ Voice Profiles & Voice Cloning</h2>
+      <p class="muted">Record or upload 30-60s speech sample. Uses XTTS v2 clone engine when installed, or Kokoro-82M / gTTS automatically.</p>
       <div class="row" style="margin-top:10px">
         <button class="btn btn-ghost" id="btn-mic">🎤 Record voice</button>
         <span id="rec-status" class="muted"></span>
@@ -73,121 +101,258 @@
   <!-- ============ STEP 2: AI TEAM ============ -->
   <section class="panel hidden" id="panel-2">
     <div class="panel-head">
-      <h1>AI Team</h1>
-      <p>Small, powerful team — <b>you choose which local Ollama model does what</b>.
-      The <b>Controller</b> receives your idea and delegates tasks to the other roles.
-      Switch any role off; built-in fallbacks keep the studio working even fully offline.</p>
+      <h1>AI Team Configuration</h1>
+      <p>Assign local Ollama models to specialized production roles. Automatic deterministic fallbacks keep the studio functional offline.</p>
     </div>
 
     <div class="card">
       <div class="row wrap">
-        <label class="muted">Ollama host</label>
+        <label class="muted">Ollama Host</label>
         <input type="text" id="team-host" class="input" value="http://localhost:11434">
-        <button class="btn btn-ghost" id="btn-refresh-models">↻ Refresh models</button>
+        <button class="btn btn-ghost" id="btn-refresh-models">↻ Refresh Models</button>
         <span id="model-count" class="muted"></span>
       </div>
       <div id="model-chips" class="chips"></div>
       <div id="ollama-offline-banner" class="banner warn hidden">
-        ⚠️ Ollama is offline. The studio runs in <b>template fallback mode</b> — plans are generated
-        without AI. Start it with <code>ollama serve</code> and pull a model
-        (<code>ollama pull llama3.2:3b</code>), then refresh.
+        ⚠️ Ollama offline — running in template fallback mode. Start with <code>ollama serve</code> to enable local AI delegation.
       </div>
     </div>
 
     <div id="role-cards" class="role-grid"></div>
 
     <div class="row" style="margin-top:16px">
-      <button class="btn btn-primary" id="btn-save-team">💾 Save AI team</button>
+      <button class="btn btn-primary" id="btn-save-team">💾 Save AI Team</button>
       <span id="team-save-msg" class="muted"></span>
     </div>
   </section>
 
-  <!-- ============ STEP 3: CREATE ============ -->
+  <!-- ============ STEP 3: CREATIVE STUDIO EDITOR (PANEL LAYOUT) ============ -->
   <section class="panel hidden" id="panel-3">
-    <div class="panel-head">
-      <h1>Create</h1>
-      <p>Describe your idea. The <b>Controller AI plans the video and delegates</b>:
-      scriptwriting → SFX direction → animation → QA. You can edit every scene before rendering.</p>
-    </div>
-
-    <div class="card">
-      <textarea id="idea" class="input" rows="3"
-        placeholder="e.g. Explain in 30 seconds why everyone should drink more water — with a funny twist at the end"></textarea>
-      <div class="row wrap" style="margin-top:12px">
+    <!-- AUTO MODE CREATION PROMPT CARD -->
+    <div class="card prompt-bar-card" id="auto-prompt-card">
+      <div class="row wrap">
+        <input type="text" id="idea" class="input grow" placeholder="e.g. Compare a smartphone vs a tablet in 30 seconds with key pros and cons">
+        <select id="select-char" class="select-sm" title="Select presenter character"></select>
         <label class="muted">Length <b id="dur-label">25s</b></label>
-        <input type="range" id="duration" min="10" max="90" value="25" class="grow" style="max-width:260px">
-        <label class="muted">Style</label>
-        <div class="chips" id="style-chips">
-          <button class="chip active" data-style="punchy, energetic, short-form">Punchy</button>
-          <button class="chip" data-style="calm, educational, clear">Educational</button>
-          <button class="chip" data-style="storytelling, emotional, cinematic">Story</button>
-          <button class="chip" data-style="hype, epic, high energy">Epic</button>
-        </div>
-        <label class="muted">Star</label>
-        <select id="select-char" class="input"></select>
+        <input type="range" id="duration" min="10" max="90" value="25" class="range-sm">
+        <button class="btn btn-primary btn-sparkle" id="btn-plan">🧠 Run AI Team</button>
       </div>
-      <div class="row" style="margin-top:14px">
-        <button class="btn btn-primary btn-big" id="btn-plan">🧠 Run AI team — plan my video</button>
-        <span id="plan-msg" class="muted"></span>
-      </div>
+      <span id="plan-msg" class="muted"></span>
     </div>
 
     <div id="team-activity" class="activity hidden">
-      <h2>AI team at work</h2>
+      <div class="activity-head">
+        <h2>🧠 AI Team at Work</h2>
+        <span class="badge" id="activity-status">Processing...</span>
+      </div>
       <div id="activity-log" class="activity-log"></div>
     </div>
 
-    <div id="plan-editor" class="hidden">
-      <div class="row wrap">
-        <input type="text" id="plan-title" class="input grow" placeholder="Video title">
-        <span id="plan-total" class="badge"></span>
-        <button class="btn btn-ghost" id="btn-add-scene">＋ Add scene</button>
-        <button class="btn btn-primary" id="btn-save-plan">💾 Save plan</button>
-        <span id="plan-save-msg" class="muted"></span>
+    <!-- MAIN STUDIO PANEL SHELL (3 COLUMNS) -->
+    <div class="studio-shell" id="studio-shell">
+      
+      <!-- LEFT PANEL: SCENES & ASSET BROWSER -->
+      <aside class="studio-col col-left">
+        <div class="col-header">
+          <h3>🎬 Scenes & Assets</h3>
+          <button class="btn btn-ghost btn-xs" id="btn-add-scene">＋ Scene</button>
+        </div>
+
+        <div class="tab-bar">
+          <button class="tab-btn active" data-tab="tab-scenes">Scenes</button>
+          <button class="tab-btn" data-tab="tab-poses">Poses</button>
+          <button class="tab-btn" data-tab="tab-images">Images</button>
+        </div>
+
+        <div class="col-content tab-content active" id="tab-scenes">
+          <div id="scene-list-rail" class="scene-list-rail">
+            <!-- Scene cards rendered here -->
+          </div>
+        </div>
+
+        <div class="col-content tab-content" id="tab-poses">
+          <div id="asset-pose-grid" class="asset-grid"></div>
+        </div>
+
+        <div class="col-content tab-content" id="tab-images">
+          <div id="asset-image-grid" class="asset-grid"></div>
+        </div>
+      </aside>
+
+      <!-- CENTER PANEL: LIVE CANVAS PREVIEW & SUBTITLE PICKER -->
+      <main class="studio-col col-center">
+        <div class="col-header">
+          <h3>👁️ Live Canvas Preview</h3>
+          <div class="canvas-actions">
+            <button class="btn btn-ghost btn-xs" id="btn-play-preview">▶ Play Scene</button>
+          </div>
+        </div>
+
+        <div class="canvas-container">
+          <canvas id="preview-canvas" width="720" height="1280"></canvas>
+          <div id="canvas-overlay-info" class="canvas-overlay">Scene 1 / 4</div>
+        </div>
+
+        <!-- SUBTITLE TEMPLATE PICKER -->
+        <div class="subtitle-template-picker">
+          <div class="picker-head">
+            <span> Khmer Subtitle Template</span>
+          </div>
+          <div class="template-thumbnails" id="subtitle-template-cards">
+            <!-- Subtitle template cards rendered here -->
+          </div>
+        </div>
+      </main>
+
+      <!-- RIGHT PANEL: PROPERTIES INSPECTOR -->
+      <aside class="studio-col col-right">
+        <div class="col-header">
+          <h3>⚙️ Scene Properties</h3>
+        </div>
+
+        <div class="col-content properties-form" id="properties-form">
+          <div class="prop-group">
+            <label class="prop-label">Hook / Title</label>
+            <input type="text" id="prop-hook" class="input input-sm">
+          </div>
+
+          <div class="prop-group">
+            <label class="prop-label">Spoken Script Narration</label>
+            <textarea id="prop-script" class="input input-sm" rows="3"></textarea>
+          </div>
+
+          <div class="prop-group" id="prop-pose-group">
+            <label class="prop-label">Character Action Pose</label>
+            <div class="row gap-xs">
+              <select id="prop-pose" class="select-sm grow"></select>
+              <button class="btn btn-ghost btn-xs" id="btn-gen-pose">🎨 Gen</button>
+            </div>
+          </div>
+
+          <!-- SUPPORTING IMAGE CONTROL -->
+          <div class="prop-group card-inner" id="prop-image-group">
+            <div class="row space-between">
+              <label class="prop-label bold">🖼️ Supporting Image</label>
+              <label class="switch-sm"><input type="checkbox" id="prop-img-needed" checked> Enable</label>
+            </div>
+
+            <div id="prop-img-controls">
+              <div class="segmented-control control-xs" id="img-source-toggle">
+                <button class="seg-btn active" data-src="action">Action</button>
+                <button class="seg-btn" data-src="web">Web Search</button>
+                <button class="seg-btn" data-src="ai">AI Draw</button>
+              </div>
+
+              <div class="row gap-xs margin-top-xs">
+                <input type="text" id="prop-img-query" class="input input-xs grow" placeholder="Image search / prompt">
+                <button class="btn btn-ghost btn-xs" id="btn-fetch-img">Fetch</button>
+              </div>
+
+              <label class="prop-label margin-top-xs">Layout Position</label>
+              <select id="prop-img-pos" class="select-xs">
+                <option value="top" selected>Top Center Box</option>
+                <option value="side">Top Left Side</option>
+                <option value="pip">Picture-in-Picture</option>
+                <option value="behind">Full Bleed Background</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="prop-row">
+            <div class="prop-group half">
+              <label class="prop-label">Duration (sec)</label>
+              <input type="number" id="prop-duration" class="input input-sm" step="0.5" min="2.5" max="12.0">
+            </div>
+
+            <div class="prop-group half">
+              <label class="prop-label">Transition</label>
+              <select id="prop-transition" class="select-sm">
+                <option value="fade">Fade</option>
+                <option value="slide">Slide</option>
+                <option value="zoom">Zoom</option>
+                <option value="wipe">Wipe</option>
+                <option value="cut">Cut</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="prop-row">
+            <div class="prop-group half">
+              <label class="prop-label">Sound Effect</label>
+              <select id="prop-sfx" class="select-sm"></select>
+            </div>
+
+            <div class="prop-group half">
+              <label class="prop-label">SFX Timing (s)</label>
+              <input type="number" id="prop-sfx-time" class="input input-sm" step="0.1" min="0" max="3">
+            </div>
+          </div>
+
+          <div class="prop-group">
+            <label class="prop-label">Background Style</label>
+            <select id="prop-bg" class="select-sm">
+              <option value="gradient-violet">Gradient Violet</option>
+              <option value="gradient-blue">Gradient Blue</option>
+              <option value="gradient-sunset">Gradient Sunset</option>
+              <option value="gradient-forest">Gradient Forest</option>
+              <option value="solid-navy">Solid Navy</option>
+              <option value="solid-dark">Solid Dark</option>
+              <option value="pattern-dots">Pattern Dots</option>
+              <option value="pattern-grid">Pattern Grid</option>
+            </select>
+          </div>
+
+          <div class="row margin-top-sm space-between">
+            <button class="btn btn-danger btn-xs" id="btn-del-scene">🗑 Delete Scene</button>
+            <button class="btn btn-primary btn-xs" id="btn-save-plan">💾 Save Plan</button>
+          </div>
+        </div>
+      </aside>
+
+    </div>
+
+    <!-- BOTTOM TIMELINE / SCENE RAIL -->
+    <div class="bottom-timeline" id="bottom-timeline">
+      <div class="timeline-header">
+        <span>🎞️ Timeline & Scene Order</span>
+        <span id="timeline-total-dur" class="badge">0.0s total</span>
       </div>
-      <div id="scene-cards" class="scene-grid"></div>
+      <div class="timeline-cards-rail" id="timeline-cards-rail">
+        <!-- Horizontal scene timeline cards -->
+      </div>
     </div>
   </section>
 
   <!-- ============ STEP 4: RENDER ============ -->
   <section class="panel hidden" id="panel-4">
     <div class="panel-head">
-      <h1>Render</h1>
-      <p>Compose scenes, blend transitions, synthesize voice + SFX and encode the final video — all on your machine.</p>
+      <h1>Render Final Video</h1>
+      <p>Compose scenes, synthesize voice narration & sound effects, apply Khmer captions, and encode final H.264 MP4 + SRT.</p>
     </div>
 
     <div class="card" id="render-settings">
       <div class="row wrap">
-        <label class="muted">Format</label>
+        <label class="muted">Resolution & Format</label>
         <select id="res-select" class="input">
           <option value="720x1280" selected>9:16 vertical · 720×1280</option>
           <option value="480x854">9:16 vertical · 480×854 (fast preview)</option>
           <option value="1080x1920">9:16 vertical · 1080×1920</option>
           <option value="1280x720">16:9 landscape · 1280×720</option>
         </select>
-        <label class="muted">Narration voice</label>
+        <label class="muted">Voice Profile</label>
         <select id="voice-select" class="input"></select>
-        <label class="muted">Kokoro voice (if no clone)</label>
+        <label class="muted">Kokoro Voice</label>
         <select id="kokoro-select" class="input">
           <option value="af_bella" selected>Bella (af_bella)</option>
           <option value="af_skye">Skye (af_skye)</option>
           <option value="af_nicole">Nicole (af_nicole)</option>
           <option value="am_michael">Michael (am_michael)</option>
-          <option value="am_echo">Echo (am_echo)</option>
-          <option value="am_fenrir">Fenrir (am_fenrir)</option>
         </select>
       </div>
       <div class="row" style="margin-top:16px">
-        <button class="btn btn-primary btn-big" id="btn-render">🎬 Generate video</button>
+        <button class="btn btn-primary btn-big" id="btn-render">🎬 Generate Video</button>
         <span id="render-msg" class="muted"></span>
       </div>
-    </div>
-
-    <div id="tts-note" class="banner warn hidden" style="margin-top:14px">
-      ⚠️ No TTS engine is available right now (XTTS / Kokoro / gTTS all missing) — the video will
-      render <b>without narration audio</b> (SFX only). Install one for human-like speech:
-      <code>pip install kokoro-onnx</code> or <code>pip install TTS==0.26.2</code> (voice cloning),
-      then restart the server.
     </div>
 
     <div id="render-progress" class="card hidden">
@@ -197,25 +362,16 @@
     </div>
 
     <div id="render-result" class="card hidden">
-      <h2>🎉 Your video is ready</h2>
+      <h2>🎉 Your Video is Ready!</h2>
       <video id="result-video" controls style="max-width:420px; width:100%; border-radius:14px;"></video>
       <div class="row" style="margin-top:14px">
         <a class="btn btn-primary" id="dl-mp4" download>⬇ Download MP4</a>
         <a class="btn btn-ghost" id="dl-srt" download>⬇ Download SRT</a>
-        <button class="btn btn-ghost" id="btn-again">＋ Make another</button>
+        <button class="btn btn-ghost" id="btn-again">＋ Make Another</button>
       </div>
     </div>
   </section>
 </main>
-
-<template id="tpl-voice-row">
-  <div class="voice-row">
-    <span class="voice-name"></span>
-    <span class="voice-meta muted"></span>
-    <button class="btn btn-ghost btn-sm play">▶ Preview</button>
-    <button class="btn btn-ghost btn-sm del">✕</button>
-  </div>
-</template>
 
 <script src="/static/app.js"></script>
 </body>
