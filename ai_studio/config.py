@@ -119,8 +119,8 @@ DEFAULTS = {
         "engine": "auto",                           # auto | comfyui | previz | defer | off
         "comfy_host": "http://127.0.0.1:8188",
         "workflow": "wan2.1_t2v_1.3b_480p",         # file name in workflows/ (or absolute path)
-        "width": 480,
-        "height": 854,
+        "width": 720,
+        "height": 1280,
         "fps": 16,
         "steps": 20,
         "cfg": 6.0,

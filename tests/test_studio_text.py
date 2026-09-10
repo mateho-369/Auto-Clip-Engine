@@ -200,12 +200,20 @@ def test_machine_a_keeps_full_pipeline_and_8gb_guards():
     resolved, plan = cfg_mod.resolve(cfg)
     assert plan["video"]["engine"] == "comfyui"
     assert plan["sfx"]["engine"] in ("mmaudio", "procedural")
-    # the 8GB design point: small frame, few frames, serialised GPU, tiled VAE path
-    assert resolved["video"]["width"] * resolved["video"]["height"] <= 480 * 854 * 1.6
+    # the 8GB design point: the VRAM guard shrinks GPU *requests* to fit at
+    # render time (engines/video.py), while the default frame stays inside
+    # the config clamp (720p-class, previz renders this fine on CPU)
+    assert resolved["video"]["width"] * resolved["video"]["height"] <= 1280 * 720
     assert resolved["video"]["max_frames"] <= 81
     assert resolved["vram"]["limit_mb"] <= 8192
     assert resolved["vram"]["serialize_gpu"] is True
     assert resolved["video"]["width"] % 2 == 0 and resolved["video"]["height"] % 2 == 0  # x264
+    from ai_studio import vram
+    frames, w, h, notes = vram.guard_request(
+        resolved, resolved["video"]["max_frames"],
+        resolved["video"]["width"], resolved["video"]["height"], free_mb=7500)
+    assert notes and w * h < resolved["video"]["width"] * resolved["video"]["height"], \
+        "GPU requests above the 8GB budget must be shrunk, not obeyed"
 
 
 def test_absurd_vram_number_is_clamped_not_obeyed():
