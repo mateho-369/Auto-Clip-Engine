@@ -218,7 +218,21 @@ async def api_update_project(project_id: str, payload: dict = Body(...)):
                                      "really are the Director.)")
         kw["script"] = khmer.normalize_block(payload["script"])
     if "settings" in payload:
-        kw["settings"] = payload["settings"] or {}
+        # deep-merge instead of replace: a PATCH that only tunes one stage
+        # (say video.engine) must not silently wipe the assembly block the
+        # Director set at creation time (burn_captions, subtitle_style, …).
+        base = (st.db.get_project(project_id) or {}).get("settings") or {}
+
+        def _merge(a, b):
+            out = dict(a)
+            for k, v in (b or {}).items():
+                if isinstance(v, dict) and isinstance(out.get(k), dict):
+                    out[k] = _merge(out[k], v)
+                else:
+                    out[k] = v
+            return out
+
+        kw["settings"] = _merge(base, payload["settings"] or {})
     if not kw:
         raise HTTPException(400, "nothing to update")
     return {"project": st.db.update_project(project_id, **kw)}

@@ -440,8 +440,11 @@ def words_for_timing(text):
     if not t:
         return []
     if khmer.is_khmer(t):
-        toks = [w for w in re.split(r"\s+", t) if w]
-        if len(toks) > 1 or " " in t:
+        # dictionary word boundaries (khmercut) keep the karaoke sweep on real
+        # words — បារម្ភ highlights as one unit, not កុំទា|ន់បា|រម្ភ pseudo-
+        # slices; whitespace/pseudo-word fallbacks keep it dependency-free.
+        toks = khmer.words(t)
+        if len(toks) > 1:
             return [(w, max(0.2, khmer.syllable_estimate(w))) for w in toks]
         units = khmer.split_clusters(t)
         words, cur = [], []
@@ -455,6 +458,28 @@ def words_for_timing(text):
         return [(w, max(0.2, khmer.syllable_estimate(w))) for w in words]
     toks = re.split(r"\s+", t)
     return [(w, max(1, len(re.findall(r"[aeiouy]+", w, re.I)))) for w in toks if w]
+
+
+def _pack_karaoke_lines(tags, max_clusters=64):
+    """Pack `[{\\k..}word, …]` karaoke tokens into lines ≤ max_clusters wide.
+
+    Width counts only the visible word (khmer.cluster_len), never the ASS tag,
+    and a token is never split from its tag."""
+    from . import khmer as khmer_mod
+
+    budget = max(8, int(max_clusters))
+    lines, cur, width = [], [], 0
+    for tok in tags:
+        word = tok.split("}", 1)[-1]
+        w = khmer_mod.cluster_len(word)
+        if cur and width + w > budget:
+            lines.append(" ".join(cur))
+            cur, width = [], 0
+        cur.append(tok)
+        width += w
+    if cur:
+        lines.append(" ".join(cur))
+    return lines or [""]
 
 
 def write_karaoke_ass(scene_windows, dst, style="karaoke", width=480, height=854):
@@ -481,7 +506,7 @@ def write_karaoke_ass(scene_windows, dst, style="karaoke", width=480, height=854
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, "
         "Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, "
         "Encoding",
-        f"Style: Default,{st.get('font', 'Khmer OS Battambang')},15,"
+        f"Style: Default,{_caption_font_family(st.get('font', 'Khmer OS Battambang'))},15,"
         f"{st.get('primary', '&H00FFFFFF')},{st.get('secondary', '&H0000FFFF')},"
         f"{st.get('outline', '&HC0000000')},&H80000000,{int(st.get('bold', 1))},0,0,0,100,100,0,0,"
         f"1,2,1,2,28,28,56,1",
@@ -504,15 +529,50 @@ def write_karaoke_ass(scene_windows, dst, style="karaoke", width=480, height=854
             k = max(1, int(round((cum - prev) * 100)))
             tags.append(f"{{\\k{k}}}{word}")
             prev = cum
-        text_line = " ".join(tags)
-        # manual line wrap (spaceless script) using cluster breaks
-        wrapped = khmer.wrap_clusters(text_line, max_clusters=64)
-        text_line = "\\N".join(wrapped)
+        # manual line wrap (spaceless script): pack whole WORDS — tag glued to
+        # its own word, never separated — until the visual cluster budget is
+        # reached. Old behaviour wrapped the already-tagged string by cluster
+        # count, which counted `{\k12}` braces as text and could strand a tag.
+        text_line = _pack_karaoke_lines(tags, max_clusters=64)
+        text_line = "\\N".join(text_line)
         lines.append(f"Dialogue: 0,{_fmt_ass_time(start)},{_fmt_ass_time(end)},Default,,0,0,0,,{text_line}")
     ensure_dir(os.path.dirname(dst) or ".")
     with open(dst, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return dst
+
+
+def _shipped_font_dir():
+    """Directory of Khmer fonts shipped with the studio (libass fontsdir).
+
+    The studio carries Battambang/Noto Sans Khmer/Moul under ``assets/fonts``
+    (OFL) so caption burning never depends on system-installed Khmer fonts —
+    a fresh Linux box or the slim Docker image has none, and libass then
+    renders tofu boxes. ``data/studio/fonts`` stays as a user-drop-in override
+    location; Windows system fonts are still consulted last."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    cands = [os.path.join(here, "assets", "fonts")]
+    try:
+        from .config import data_root
+        cands.append(os.path.join(data_root(), "fonts"))
+    except Exception:
+        pass
+    for d in cands:
+        try:
+            if d and os.path.isdir(d) and any(f.lower().endswith((".ttf", ".otf"))
+                                              for f in os.listdir(d)):
+                return d
+        except Exception:
+            continue
+    return ""
+
+
+def _caption_font_family(default="Khmer OS Battambang"):
+    """Family name libass should use: the shipped Battambang when present."""
+    d = _shipped_font_dir()
+    if d and os.path.exists(os.path.join(d, "Battambang-Regular.ttf")):
+        return "Battambang"
+    return default
 
 
 def burn_subtitles(video, srt, dst, force_style="FontName=Khmer OS Battambang,FontSize=15,PrimaryColour=&H00FFFFFF,OutlineColour=&HC0000000,BorderStyle=1,Outline=2,Shadow=0,MarginV=56,MarginL=28,MarginR=28,Alignment=2",
@@ -526,7 +586,9 @@ def burn_subtitles(video, srt, dst, force_style="FontName=Khmer OS Battambang,Fo
     dependent vowels and coeng-stacked consonants render unshaped, reading as
     scrambled text even though the underlying SRT is correct). Pointing
     fontsdir at the Windows font directory and picking a font confirmed (by
-    rendering a test frame) to shape correctly fixes it.
+    rendering a test frame) to shape correctly fixes it. On every platform we
+    also offer the studio's *shipped* OFL Khmer fonts first, so a fresh
+    Linux/Docker box burns real Khmer instead of tofu boxes.
     """
     if not _has_filter("subtitles"):
         raise RuntimeError("this ffmpeg build has no 'subtitles' filter (needs libass) — "
@@ -534,10 +596,15 @@ def burn_subtitles(video, srt, dst, force_style="FontName=Khmer OS Battambang,Fo
     srt_esc = str(srt).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
     vf = f"subtitles='{srt_esc}'"
     fontsdir = os.environ.get("SystemRoot", r"C:\Windows") + r"\Fonts" if os.name == "nt" else ""
+    if not (fontsdir and os.path.isdir(fontsdir)):
+        fontsdir = _shipped_font_dir() or ""
     if fontsdir and os.path.isdir(fontsdir):
         vf += f":fontsdir='{fontsdir.replace(chr(92), '/').replace(':', chr(92) + ':')}'"
     if style and style not in ("clean",) and style in SUBTITLE_STYLES:
         force_style = subtitle_force_style(style)
+    family = _caption_font_family()
+    if family != "Khmer OS Battambang":
+        force_style = force_style.replace("Khmer OS Battambang", family)
     vf += f":force_style='{force_style}'"
     run_ffmpeg(["-i", video, "-vf", vf,
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-c:a", "copy", dst],
@@ -552,6 +619,8 @@ def burn_ass(video, ass, dst, style="karaoke"):
     ass_esc = str(ass).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
     vf = f"subtitles='{ass_esc}'"
     fontsdir = os.environ.get("SystemRoot", r"C:\Windows") + r"\Fonts" if os.name == "nt" else ""
+    if not (fontsdir and os.path.isdir(fontsdir)):
+        fontsdir = _shipped_font_dir() or ""
     if fontsdir and os.path.isdir(fontsdir):
         vf += f":fontsdir='{fontsdir.replace(chr(92), '/').replace(':', chr(92) + ':')}'"
     run_ffmpeg(["-i", video, "-vf", vf,
@@ -564,6 +633,11 @@ def burn_ass(video, ass, dst, style="karaoke"):
 def _find_font():
     """A usable font (Khmer-capable preferred) for title rendering."""
     cands = []
+    shipped = _shipped_font_dir()
+    if shipped:
+        for f in sorted(os.listdir(shipped)):
+            if f.lower().endswith((".ttf", ".otf")) and "battambang" in f.lower():
+                cands.append(os.path.join(shipped, f))
     if os.name == "nt":
         root = os.environ.get("WINDIR", r"C:\Windows")
         for d in (os.path.join(root, "Fonts"),):
@@ -712,8 +786,16 @@ def _wrap_khmer(text, max_chars=16):
     text = text.strip()
     if not text:
         return text
-    units = khmer_mod.split_clusters(text)
     budget = max(1, int(max_chars))
+    # Prefer dictionary word boundaries (khmercut) — breaking between clusters
+    # is corruption-safe but still slices words like យឺត into យឺ | ត, and can
+    # strand a lone ។ on its own line. Falls back to the cluster packing below
+    # when khmercut is not installed.
+    try:
+        return "\n".join(khmer_mod.wrap_words(text, max_clusters=budget))
+    except Exception:
+        pass
+    units = khmer_mod.split_clusters(text)
     lines, cur = [], []
     for cl in units:
         cur.append(cl)

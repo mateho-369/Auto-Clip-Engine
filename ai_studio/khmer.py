@@ -152,6 +152,76 @@ def clip_clusters(text, max_clusters):
     return truncate_clusters(text, max_clusters, suffix="")
 
 
+def words(text):
+    """Khmer-aware *word* tokens for caption wrapping and karaoke timing.
+
+    Uses the ``khmercut`` dictionary segmenter when it is installed, so a word
+    like យឺត stays whole (cluster-safe wrapping alone still breaks words at
+    cluster boundaries, which reads like hyphenating "bab/y" without the
+    hyphen). khmercut ships its dictionary in the wheel and works offline.
+    Falls back to whitespace splitting, then to 2-cluster pseudo-words for
+    scriptio-continua text that has no spaces at all.
+    """
+    t = (text or "").strip()
+    if not t:
+        return []
+    try:
+        from khmercut import tokenize  # optional dependency, offline dictionary
+        toks = [w for w in tokenize(t) if w.strip()]
+        if toks:
+            return toks
+    except Exception:
+        pass
+    if " " in t:
+        toks = [w for w in re.split(r"\s+", t) if w]
+        if toks:
+            return toks
+    units = split_clusters(t)
+    words, cur = [], []
+    for u in units:
+        cur.append(u)
+        if len(cur) >= 2:
+            words.append("".join(cur))
+            cur = []
+    if cur:
+        words.append("".join(cur))
+    return words
+
+
+def wrap_words(text, max_clusters=16):
+    """Wrap `text` into lines that break BETWEEN words, never inside one.
+
+    Line width is measured in character clusters (the visual unit Khmer
+    actually occupies), but the break points come from `words()` — dictionary
+    word boundaries when khmercut is available. Lone punctuation tokens
+    (។ ៕ ៖ ! ?) are glued to the previous line instead of starting one.
+    """
+    t = (text or "").strip()
+    if not t:
+        return [""]
+    budget = max(1, int(max_clusters))
+    toks = words(t)
+    lines, cur, width = [], [], 0
+    for tok in toks:
+        w = cluster_len(tok)
+        alone_punct = len(tok) == 1 and tok in "។៕៖？！?!.,，"
+        if alone_punct and cur:
+            cur.append(tok)
+            width += w
+            continue
+        if cur and width + w > budget:
+            lines.append("".join(cur))
+            cur, width = [], 0
+        cur.append(tok)
+        width += w
+        if width >= budget:
+            lines.append("".join(cur))
+            cur, width = [], 0
+    if cur:
+        lines.append("".join(cur))
+    return lines or [""]
+
+
 def wrap_clusters(text, max_clusters=16):
     """Wrap `text` at cluster boundaries: returns a list of lines, each at most
     ``max_clusters`` long (a single cluster longer than the budget is its own
