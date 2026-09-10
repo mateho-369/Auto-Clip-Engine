@@ -15,6 +15,39 @@ from .. import khmer, media, previz
 from ..util import (ensure_dir, jdump, media_duration, write_json)
 
 
+def _caption_windows(scenes, starts, k_end):
+    """One caption per SENTENCE (professional subtitle rhythm).
+
+    A scene's narration often holds two sentences; showing the whole scene
+    text at once produced stacked multi-line boxes with mid-sentence breaks.
+    Each scene window [start_i, k_end_i] is split at sentence boundaries and
+    the time distributed proportionally to sentence length (clusters) —
+    scene boundaries stay exact, in-scene sentence times are an estimate.
+    """
+    windows = []
+    for i, s in enumerate(scenes):
+        t0 = float(starts[i])
+        t1 = max(t0 + 0.6, float(k_end[i]))
+        disp = khmer.display_text(s.get("text", "")).strip()
+        if not disp:
+            continue
+        sents = [x.strip() for x in khmer.split_sentences(disp) if x.strip()]
+        if len(sents) <= 1:
+            windows.append((t0, t1, disp))
+            continue
+        weights = [max(4.0, float(khmer.cluster_len(x))) for x in sents]
+        total = sum(weights)
+        cur = t0
+        for j, (w, sent) in enumerate(zip(weights, sents)):
+            if j == len(sents) - 1:
+                windows.append((cur, t1, sent))
+            else:
+                end = cur + (t1 - t0) * (w / total)
+                windows.append((cur, end, sent))
+                cur = end
+    return windows
+
+
 def assemble(project, scenes, stage_assets, cfg, out_dir, run_id="", progress=None,
              allow_previz=True):
     """scenes: [{idx, text, ...}], stage_assets: {kind: {idx: {path, duration, meta}}}"""
@@ -192,9 +225,7 @@ def assemble(project, scenes, stage_assets, cfg, out_dir, run_id="", progress=No
             ass_path = os.path.join(out_dir, os.path.splitext(os.path.basename(final))[0] + ".ass")
             k_end = [starts[i + 1] if i + 1 < len(starts) else out["duration"]
                      for i in range(len(scenes))]
-            windows = [(starts[i], max(starts[i] + 0.6, k_end[i]),
-                        khmer.display_text(s.get("text", "")))
-                       for i, s in enumerate(scenes)]
+            windows = _caption_windows(scenes, starts, k_end)
             info_ass = cap_mod.build_ass(windows, cap_style, width, height, ass_path)
             cap_warnings.extend(info_ass.get("warnings") or [])
             media.burn_ass(final, ass_path, burned)

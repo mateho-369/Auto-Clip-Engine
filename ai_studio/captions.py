@@ -535,23 +535,19 @@ def build_ass(blocks: list[tuple[float, float, str]], style: dict, out_w: int, o
               dst: str, karaoke: bool | None = None) -> dict:
     """Write the caption .ass for `blocks` = [(start, end, text), …].
 
-    Sentence path: per-line Dialogue events with explicit \\pos so
-    line_spacing / margins / max width are honoured exactly. Karaoke path:
-    one Dialogue per block, lines joined with \\N and {\\k} tags — natural
-    leading (documented) and proportional word timing (estimated, not forced
-    alignment).
+    ONE Dialogue event per caption block, lines joined with \\N: libass draws
+    a single background box around the whole block (BorderStyle=4) and lays
+    the lines out with its standard leading, anchored by the style's
+    Alignment + margins (bottom/center/top, left/center/right). Pre-wrapped
+    lines come from plan_blocks (shaped-pixel budget), so the block never
+    exceeds the configured width. Karaoke blocks additionally carry {\\k}
+    word tags with proportional timing (estimated, not forced alignment).
     """
     from . import khmer as kh, media as media_mod
 
     karaoke = style.get("karaoke", False) if karaoke is None else karaoke
     plan = plan_blocks([b[2] for b in blocks], style, out_w, out_h)
     scale = plan["scale"]
-    size_px = style["size_pct"] / 100.0 * float(out_h)
-    line_h = size_px * float(style["line_spacing"])
-    ml = style["margin_h_pct"] / 100.0 * out_w
-    mr = ml
-    mv = style["margin_v_pct"] / 100.0 * out_h
-    panel_pad = scale_px(style, style["panel"]["padding_px"], out_h) if style["panel"]["enabled"] else 0.0
 
     header = [
         "[Script Info]", "ScriptType: v4.00+",
@@ -571,7 +567,7 @@ def build_ass(blocks: list[tuple[float, float, str]], style: dict, out_w: int, o
         if not disp:
             continue
         p = plan["plans"][bi]
-        fsc = f"{{\\fscx{round(scale * 100)}\\fscy{round(scale * 100)}}}" if scale < 0.999 else ""
+        fsc = "{\\fscx%d\\fscy%d}" % (round(scale * 100), round(scale * 100)) if scale < 0.999 else ""
         if karaoke:
             words = media_mod.words_for_timing(disp)
             weights = [w for _wd, w in words] or [1.0]
@@ -587,26 +583,10 @@ def build_ass(blocks: list[tuple[float, float, str]], style: dict, out_w: int, o
                 prev = cum
             packed = _pack_karaoke_pixels(tags, plan["shaper"], p["budget_px"])
             body = "\\N".join(packed)
-            events.append(f"Dialogue: 0,{_fmt_ass_time(start)},{_fmt_ass_time(end)},Cap,,0,0,0,,"
-                          f"{fsc}{body}")
-            continue
-        # sentence path — one event per line, explicit layout
-        n = len(p["lines"])
-        anchor_x = {"left": ml, "center": out_w / 2.0, "right": out_w - mr}[style["align"]]
-        if style["position"] == "bottom":
-            block_bottom = out_h - mv - panel_pad
-            top = block_bottom - n * line_h
-            an = {"left": 4, "center": 5, "right": 6}[style["align"]]
-        elif style["position"] == "top":
-            top = mv + panel_pad
-            an = {"left": 7, "center": 8, "right": 9}[style["align"]]
         else:
-            top = (out_h - n * line_h) / 2.0
-            an = {"left": 4, "center": 5, "right": 6}[style["align"]]
-        for li, line in enumerate(p["lines"]):
-            cy = top + (li + 0.5) * line_h
-            events.append(f"Dialogue: 0,{_fmt_ass_time(start)},{_fmt_ass_time(end)},Cap,,0,0,0,,"
-                          f"{fsc}{{\\an{an}\\pos({round(anchor_x,1)},{round(cy,1)})}}{line}")
+            body = "\\N".join(p["lines"])
+        events.append(f"Dialogue: 0,{_fmt_ass_time(start)},{_fmt_ass_time(end)},Cap,,0,0,0,,"
+                      f"{fsc}{body}")
     ensure_dir(os.path.dirname(dst) or ".")
     with open(dst, "w", encoding="utf-8") as f:
         f.write("\n".join(header + events) + "\n")

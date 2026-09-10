@@ -171,24 +171,30 @@ def test_plan_shrinks_per_block_and_never_drops_text():
 @pytest.mark.skipif(not HAS_UHB, reason="uharfbuzz not installed")
 def test_build_ass_sentence_and_karaoke(tmp_path):
     s, _ = cap.validate_style({"preset": "soft_card"})
-    out = cap.build_ass([(0.0, 4.0, REQUIRED_TEXTS[1])], s, 480, 854,
+    two_sentences = REQUIRED_TEXTS[0] + " " + REQUIRED_TEXTS[1]
+    out = cap.build_ass([(0.0, 4.0, two_sentences)], s, 480, 854,
                         str(tmp_path / "a.ass"))
     body = open(out["path"], encoding="utf-8").read()
     assert "Style: Cap,Noto Sans Khmer" in body
     style_line = next(l for l in body.splitlines() if l.startswith("Style:"))
     fields = style_line.split(",")
     assert fields[15] == "4", "soft_card must use BorderStyle=4 (libass box)"
-    assert "\\pos(" in body, "sentence path must position lines explicitly"
-    assert REQUIRED_TEXTS[1].replace(" ", "").strip()[:6] in body.replace(" ", "")
+    dialogues = [l for l in body.splitlines() if l.startswith("Dialogue:")]
+    assert len(dialogues) == 1, "one Dialogue per caption block (single panel box)"
+    assert "\\N" in dialogues[0], "wrapped lines join inside the one block"
+    assert "\\pos(" not in body, "layout comes from style alignment, not per-line pos"
+    for t in (REQUIRED_TEXTS[0], REQUIRED_TEXTS[1]):
+        assert t.replace(" ", "")[:8] in body.replace(" ", "").replace("\\N", "")
 
     s2, _ = cap.validate_style({"preset": "clean", "karaoke": True})
     out2 = cap.build_ass([(0.0, 4.0, REQUIRED_TEXTS[1])], s2, 480, 854,
-                         str(tmp_path / "k.ass"))
+                        str(tmp_path / "k.ass"))
     body2 = open(out2["path"], encoding="utf-8").read()
     assert "{\\k" in body2 and out2["timing"] == "estimated-proportional"
+    d2 = [l for l in body2.splitlines() if l.startswith("Dialogue:")]
+    assert len(d2) == 1
 
 
-@pytest.mark.skipif(not HAS_UHB, reason="uharfbuzz not installed")
 def test_ass_honors_style_parameters(tmp_path):
     s, _ = cap.validate_style({"preset": "clean", "text_color": "#ff8800",
                                "font": "battambang", "weight": "bold",
@@ -200,7 +206,7 @@ def test_ass_honors_style_parameters(tmp_path):
     assert "Battambang" in style_line
     assert "&H000088FF" in style_line, f"color not carried: {style_line}"
     assert ",-1," in style_line, "bold weight not applied"
-    assert "\\an8" in body, "top position must use an7/8/9 anchoring"
+    assert ",8," in style_line, "top position must set Alignment 7/8/9 in the style"
 
 
 # ------------------------------------------------------------------ preview

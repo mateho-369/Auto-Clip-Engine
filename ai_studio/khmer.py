@@ -222,26 +222,67 @@ def wrap_words(text, max_clusters=16, width_fn=None, budget_px=None):
     measure = width_fn or (lambda s: cluster_len(s))
     budget = float(budget_px) if budget_px else max(1, int(max_clusters))
     space_w = measure(" ") if width_fn else 1.0
-    lines: list[list[tuple[str, bool]]] = []
-    cur: list[tuple[str, bool]] = []
-    width = 0.0
+
+    # token list with widths (a lone trailing sign stays glued to its word)
+    toks2: list[tuple[str, bool, float]] = []
     for word, had_space in toks:
-        w = measure(word)
-        sep_w = space_w if (had_space and cur) else 0.0
-        lone_punct = len(word) == 1 and word in "។៕៖？！?!.,，—–-/"
-        if lone_punct and cur:
-            cur.append((word, had_space))
-            width += sep_w + w
+        lone_punct = len(word) == 1 and word in "។៕៖？！?!.,，—–-/" and toks2
+        if lone_punct:
+            pw, _ps, _w = toks2[-1]
+            sep = " " if had_space else ""
+            toks2[-1] = (pw + sep + word, _ps, _w + (space_w if had_space else 0.0) + measure(word))
             continue
-        if cur and width + sep_w + w > budget:
-            lines.append(cur)
-            cur, width = [], 0.0
-            sep_w = 0.0
-        cur.append((word, had_space and bool(cur)))
-        width += sep_w + w
-    if cur:
-        lines.append(cur)
-    out = ["".join(((" " if had and i else "") + w) for i, (w, had) in enumerate(l)) for l in lines]
+        toks2.append((word, had_space, measure(word)))
+    n = len(toks2)
+    if n == 0:
+        return [""]
+
+    # prefix widths: width(i,j) = shaped width of tokens i..j on one line
+    pref = [0.0]
+    for _w, _s, wd in toks2:
+        pref.append(pref[-1] + (space_w if _s else 0.0) + wd)
+    INF = float("inf")
+
+    def line_width(i: int, j: int) -> float:
+        return pref[j] - pref[i]
+
+    def line_cost(i: int, j: int, is_last: bool) -> float:
+        """Raggedness cost of tokens i..j as one (possibly last) line."""
+        leftover = budget - line_width(i, j)
+        if leftover >= 0:
+            # a single word alone on the final line reads as a mistake —
+            # balance instead (unless it is the only possible break)
+            orphan = is_last and j - i == 1 and n > 1
+            return (leftover * leftover) * (4.0 if orphan else 1.0)
+        if j - i == 1:
+            # one word wider than the whole line: allowed, flagged by caller
+            return (budget * budget) * 8.0
+        return INF
+
+    # DP minimum-raggedness: dp[j] = best cost of the first j tokens
+    dp = [INF] * (n + 1)
+    back = [-1] * (n + 1)
+    dp[0] = 0.0
+    for j in range(1, n + 1):
+        for i in range(j - 1, -1, -1):
+            if dp[i] == INF:
+                continue
+            c = dp[i] + line_cost(i, j, j == n)
+            if c < dp[j]:
+                dp[j] = c
+                back[j] = i
+    # fall back to one-word-per-line if even that is impossible
+    if dp[n] == INF:  # pragma: no cover (single tokens are always allowed)
+        return [w for w, _s, _wd in toks2]
+    bounds, j = [], n
+    while j > 0:
+        bounds.append((back[j], j))
+        j = back[j]
+    bounds.reverse()
+    out = []
+    for i, j in bounds:
+        parts = [(w, s and k > i) for k, (w, s, _wd) in enumerate(toks2) if i <= k < j]
+        out.append("".join((" " if s else "") + w for w, s in parts))
     return out or [""]
 
 
