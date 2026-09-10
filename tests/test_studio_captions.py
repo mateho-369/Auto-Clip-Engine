@@ -51,6 +51,7 @@ def test_font_file_unknown_and_missing_are_actionable():
         cap.font_file("moul", "bold")  # Moul ships regular only
 
 
+@pytest.mark.skipif(not HAS_UHB, reason="needs uharfbuzz (shaping)")
 def test_every_font_shapes_khmer_with_harfbuzz():
     if not HAS_UHB:
         pytest.skip("uharfbuzz not installed")
@@ -219,6 +220,7 @@ def test_preview_renders_real_frame_and_caches(tmp_path, monkeypatch):
     assert p3 != p1
 
 
+@pytest.mark.skipif(not HAS_UHB, reason="needs uharfbuzz (shaping)")
 def test_preview_missing_font_is_error_not_tofu(tmp_path, monkeypatch):
     s, _ = cap.validate_style({"preset": "clean", "font": "noto_sans_khmer"})
     # hide the font file → the renderer must raise an actionable error
@@ -231,3 +233,29 @@ def test_preview_missing_font_is_error_not_tofu(tmp_path, monkeypatch):
     with pytest.raises(Exception):
         cap.render_preview(s, REQUIRED_TEXTS[0], 480, 854, bg="dark",
                            work_dir=str(tmp_path), cache_key="broken1")
+
+
+@pytest.mark.skipif(not HAS_UHB, reason="needs uharfbuzz (shaping)")
+def test_preview_endpoint_bare_preset_expands_not_clobbered(tmp_path):
+    """Regression: POST /api/captions/preview with {"preset": "bold_social"}
+    must render THAT preset. The old merge put the global style's explicit
+    values on top, so every preset silently rendered as `clean`."""
+    from starlette.testclient import TestClient
+    from ai_studio.app import create_app
+    with TestClient(create_app(str(tmp_path))) as client:
+        r = client.post("/api/captions/preview", json={
+            "style": {"preset": "bold_social"},
+            "width": 480, "height": 854, "background": "dark",
+            "text": REQUIRED_TEXTS[1],
+        })
+        assert r.status_code == 200, r.text
+        s = r.json()["style"]
+        assert (s["font"], s["weight"], s["text_color"]) == (
+            "kantumruy_pro", "bold", "#ffe23d")
+        assert r.json()["modified"] == []
+        # …and naming no preset previews the machine's global default
+        r2 = client.post("/api/captions/preview", json={
+            "style": {}, "width": 480, "height": 854,
+            "background": "dark", "text": REQUIRED_TEXTS[1],
+        })
+        assert r2.status_code == 200

@@ -1,12 +1,24 @@
 import os
+
+import pytest
 """Caption-wrap + karaoke word-unit tests (khmercut path with clean fallbacks).
 
 Run: PYTHONPATH=. pytest tests/test_studio_caption_wrap.py -q
 """
 from ai_studio import khmer, media
 
+try:
+    import khmercut  # noqa: F401
+    HAS_KHMERCUT = True
+except Exception:
+    HAS_KHMERCUT = False
+
+needs_khmercut = pytest.mark.skipif(
+    not HAS_KHMERCUT, reason="khmercut (dictionary segmentation) not installed")
+
 
 # ------------------------------------------------------------------ khmer.words
+@needs_khmercut
 def test_words_prefers_dictionary_boundaries():
     # khmercut keeps បារម្ភ and អ្នកដទៃ whole; a cluster/whitespace splitter can't.
     words = khmer.words("យើងកុំទាន់បារម្ភថាខ្លួនឯងរៀនយឺតជាងអ្នកដទៃ។")
@@ -30,6 +42,7 @@ def test_words_empty_and_whitespace_only():
 
 
 # ------------------------------------------------------------------ wrap_words
+@needs_khmercut
 def test_wrap_words_never_splits_a_word():
     text = "យើងកុំទាន់បារម្ភថាខ្លួនឯងរៀនយឺតជាងអ្នកដទៃ។"
     lines = khmer.wrap_words(text, max_clusters=16)
@@ -59,12 +72,14 @@ def test_wrap_words_respects_budget():
 
 
 # ------------------------------------------------------------------ media layer
+@needs_khmercut
 def test_wrap_khmer_srt_lines_are_word_safe():
     text = "យើងកុំទាន់បារម្ភថាខ្លួនឯងរៀនយឺតជាងអ្នកដទៃ។"
     out = media._wrap_khmer(text, max_chars=16)
     assert "យឺត" in out.split("\n")[-1] or "យឺត" in out.split("\n")[0], out
 
 
+@needs_khmercut
 def test_words_for_timing_uses_dictionary_units():
     units = [w for w, _weight in media.words_for_timing("យើងកុំទាន់បារម្ភថាខ្លួនឯងរៀនយឺតជាងអ្នកដទៃ។")]
     assert "បារម្ភ" in units
