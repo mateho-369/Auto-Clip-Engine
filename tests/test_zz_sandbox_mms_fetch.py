@@ -35,9 +35,17 @@ def _on_sandbox_ci() -> bool:
 
 
 def _note(msg: str) -> None:
-    """Emit an error-annotation (≤1KB) readable via the check-runs API."""
+    """Emit an error-annotation (≤1KB) readable via the check-runs API.
+
+    os.write(1, …) bypasses pytest's output capture so the ::error:: workflow
+    command reaches the step log (and thus GitHub's annotation service) even
+    when the test passes and captured stdout is never printed.
+    """
     msg = "SBX " + str(msg).replace("\n", " | ")[:900]
-    print(f"::error::{msg}", flush=True)
+    try:
+        os.write(1, f"::error::{msg}\n".encode())
+    except Exception:  # noqa: BLE001
+        print(f"::error::{msg}", flush=True)
 
 
 @pytest.mark.skipif(not _on_sandbox_ci(), reason="sandbox-only model fetch")
