@@ -779,10 +779,15 @@ async def api_captions_preview(payload: dict = Body(default={})):
         raise HTTPException(404, "project not found")
     raw_style = payload.get("style") or {}
     # no project context → start from the GLOBAL defaults, not bare DEFAULTS,
-    # so the preview matches what this machine would actually render
-    if proj is None:
-        base = cap.effective_style({}, st.config())
-        raw_style = {**base, **raw_style, "preset": raw_style.get("preset", base.get("preset"))}
+    # so the preview matches what this machine would actually render — but
+    # ONLY when the caller didn't name a preset: a bare {"preset": "x"} must
+    # expand from the preset itself, and the global base's explicit values
+    # would otherwise clobber the preset's fields (they look like overrides).
+    if proj is None and not str(raw_style.get("preset") or "").strip():
+        raw_style = {**cap.effective_style({}, st.config()), **raw_style}
+    elif proj is not None and not str(raw_style.get("preset") or "").strip():
+        # project context: preview what THIS project would render
+        raw_style = {**cap.effective_style(proj.get("settings") or {}, st.config()), **raw_style}
     style, issues = cap.validate_style(raw_style)
     text = khmer.clip_clusters(khmer.strip_emoji_and_marks(str(payload.get("text") or
                                   "យើងម្នាក់ៗ មានផ្លូវដើររៀងៗខ្លួន។")), 220)
