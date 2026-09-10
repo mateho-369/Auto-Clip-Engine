@@ -111,15 +111,13 @@ def test_sandbox_fetch_convert_mms_khm(tmp_path, capfd):
     if ok == 0:
         pytest.fail("sherpa TTS produced no scene audio")
 
-    # 4. compress for the comment channel (ffmpeg is installed by this workflow)
-    audio = tmp_path / "narration"
-    audio.mkdir(exist_ok=True)
-    for w in sorted(wave_dir.glob("scene_*.wav")):
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(w),
-                        "-c:a", "libopus", "-b:a", "24k", "-ac", "1", "-ar", "24000",
-                        str(audio / (w.stem + ".ogg"))], check=True, timeout=300)
+    # 4. compress with the stdlib only (no ffmpeg/tar needed on the runner —
+    # the earlier attempt died right here on an external-binary dependency)
+    import tarfile
     bundle = tmp_path / "narration.tar.gz"
-    subprocess.run(["tar", "czf", str(bundle), "-C", str(audio), "."], check=True)
+    with tarfile.open(bundle, "w:gz") as tf:
+        for w in sorted(wave_dir.glob("scene_*.wav")):
+            tf.add(str(w), arcname=w.name)
     _note(f"bundle={bundle.stat().st_size}B ok={ok}")
 
     # 5. deliver as base64 PR comments (the sandbox-readable channel)
