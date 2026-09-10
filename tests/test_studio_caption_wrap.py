@@ -11,8 +11,11 @@ def test_words_prefers_dictionary_boundaries():
     # khmercut keeps បារម្ភ and អ្នកដទៃ whole; a cluster/whitespace splitter can't.
     words = khmer.words("យើងកុំទាន់បារម្ភថាខ្លួនឯងរៀនយឺតជាងអ្នកដទៃ។")
     assert "បារម្ភ" in words
-    assert "អ្នកដទៃ" in words
     assert "យឺត" in words
+    # the trailing sign is merged into the word it follows — it must never
+    # start a line on its own, so "អ្នកដទៃ។" is one token
+    assert "អ្នកដទៃ។" in words
+    assert "អ្នកដទៃ" not in words
 
 
 def test_words_falls_back_without_khmercut():
