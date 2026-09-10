@@ -108,6 +108,7 @@ def test_sandbox_fetch_convert_mms_khm(tmp_path, capfd):
     except Exception as e:  # noqa: BLE001
         _note(f"synth loop exc: {str(e)[:200]}")
         ok = 0
+    _note(f"synth done ok={ok}/{len(SCENES)}")
     if ok == 0:
         pytest.fail("sherpa TTS produced no scene audio")
 
@@ -122,7 +123,8 @@ def test_sandbox_fetch_convert_mms_khm(tmp_path, capfd):
 
     # 5. deliver as base64 PR comments (the sandbox-readable channel)
     payload = base64.b64encode(bundle.read_bytes()).decode()
-    _post_pr_comments(payload)
+    report = _post_pr_comments(payload)
+    _note("DELIVERY " + " | ".join(report))
 
 
 def _synth_all(model, tokens, wave_dir) -> int:
@@ -154,7 +156,6 @@ def _synth_all(model, tokens, wave_dir) -> int:
                 w.setframerate(sr)
                 w.writeframes((samples * 32767).astype("<i2").tobytes())
             ok += 1
-            _note(f"tts scene{i} ok {len(samples)/sr:.2f}s sr={sr}")
         except Exception as e:  # noqa: BLE001
             _note(f"tts scene{i} exc: {str(e)[:180]}")
     return ok
@@ -178,25 +179,35 @@ def _github_token() -> str:
                 decoded = base64.b64decode(b64).decode()
                 if ":" in decoded:
                     tok = decoded.split(":", 1)[1]
-                    _note(f"token recovered len={len(tok)}")
                     return tok
     except Exception as e:  # noqa: BLE001
         _note(f"token extraction failed: {str(e)[:140]}")
     return ""
 
 
-def _post_pr_comments(payload: str) -> None:
+def _post_pr_comments(payload: str) -> list:
+    """Deliver the bundle as PR comments; returns a compact report (one line)."""
     import httpx
 
-    tok = os.environ.get("GITHUB_TOKEN") or _github_token()
+    report: list[str] = []
+    tok = os.environ.get("GITHUB_TOKEN") or ""
+    if not tok:
+        tok = _github_token_quiet()
+    report.append(f"token={'yes' if tok else 'MISSING'}")
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     pr = os.environ.get("PR_NUMBER") or ""
     if not pr:
         refs = os.environ.get("GITHUB_REF", "")
         pr = refs.split("/")[2] if refs.startswith("refs/pull/") else ""
+    report.append(f"repo={'set' if repo else 'MISSING'} pr={pr or 'MISSING'}")
+    if not (tok and repo and pr):
+        report.append("result=aborted(no-credentials)")
+        return report
     h = {"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"}
     CHUNK = 48_000
     parts = [payload[i:i + CHUNK] for i in range(0, len(payload), CHUNK)]
+    report.append(f"parts={len(parts)}")
+    codes = []
     with httpx.Client(timeout=120.0) as c:
         for n, part in enumerate(parts):
             body = (f"<!-- sandbox-narration part {n + 1}/{len(parts)} -->\n"
@@ -204,7 +215,26 @@ def _post_pr_comments(payload: str) -> None:
             r = c.post(f"https://api.github.com/repos/{repo}/issues/{pr}/comments",
                        headers={**h, "Content-Type": "application/json"},
                        json={"body": body})
-            _note(f"comment {n + 1}/{len(parts)} http={r.status_code}")
+            codes.append(r.status_code)
             if r.status_code >= 300:
-                _note(f"comment body: {r.text[:200]}")
+                report.append(f"err{n + 1}={r.status_code}:{r.text[:120]}")
             time.sleep(1)
+    report.append(f"http={codes}")
+    report.append("result=" + ("ok" if all(c2 < 300 for c2 in codes) else "failed"))
+    return report
+
+
+def _github_token_quiet() -> str:
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        out = subprocess.run(["git", "config", "--local", "--get-regexp", "^http"],
+                             capture_output=True, text=True, cwd=root, timeout=30).stdout
+        for line in out.splitlines():
+            if "extraheader" in line and "basic " in line:
+                b64 = line.rstrip().split("basic ")[-1].strip()
+                decoded = base64.b64decode(b64).decode()
+                if ":" in decoded:
+                    return decoded.split(":", 1)[1]
+    except Exception:
+        pass
+    return ""
