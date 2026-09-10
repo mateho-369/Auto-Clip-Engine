@@ -328,11 +328,13 @@ def estimate_speech_seconds(text, wpm=None, calm=1.0):
 
 
 # -------------------------------------------------------------- segmentation
-def split_sentences(text, max_chars=None):
+def split_sentences(text, max_chars=None, budget_chars=False):
     """Split a script into ordered sentences, honouring newlines as hard breaks.
 
     ``max_chars`` over-long runs (a Director pasting one 400-char paragraph) are
-    secondarily split at Khmer spaces so no scene is unrenderable.
+    secondarily split at Khmer spaces so no scene is unrenderable. Pass
+    ``budget_chars=True`` when ``max_chars`` is a real, hard budget (captions)
+    rather than the studio's advisory scene window.
     """
     text = normalize_block(text)
     if not text:
@@ -350,25 +352,34 @@ def split_sentences(text, max_chars=None):
             if len(s) <= max_chars:
                 out.append(s)
                 continue
-            out.extend(_hard_split(s, max_chars))
+            out.extend(_hard_split(s, max_chars, budget_chars=budget_chars))
         return [s for s in out if s]
     return [s for s in raw if s]
 
 
-def _hard_split(sentence, max_chars):
-    """Split on Khmer spaces (then commas) to respect the char budget.
+def _hard_split(sentence, max_chars, budget_chars=False):
+    """Split at cluster boundaries to respect the budget — never mid-cluster.
 
-    ``max_chars`` is interpreted as *characters* for Latin text and as
-    *character clusters* for Khmer — a raw codepoint cut can land between a
-    coeng (U+17D2) and its subscript consonant, which renders as a broken
-    syllable. The budget comparisons therefore use ``cluster_len()`` on Khmer
-    and ``len()`` elsewhere.
+    ``max_chars`` is a *character* budget for Latin text and a *cluster* budget
+    for Khmer (a raw codepoint cut can land between a coeng U+17D2 and its
+    subscript consonant, which renders as a broken syllable).
+
+    ``budget_chars=True`` ignores the studio's character budget and splits only
+    by ``max_chars`` clusters — that is the captions mode, where the real limit
+    is measured in shaped pixels by ``ai_studio.captions``.
     """
     is_kh = is_khmer(sentence)
     measure = (lambda t: cluster_len(t)) if is_kh else len
+    limit = int(max_chars)
+    if not budget_chars:
+        # the studio's per-scene character budget is advisory: a scene may be up
+        # to it, but a long sentence is not chopped merely because the caller
+        # passed a smaller number (captions mode opts into a hard budget).
+        from .style import SCENE_MAX_CHARS
+        limit = max(limit, int(SCENE_MAX_CHARS))
     chunks, cur = [], ""
     for piece in re.split(r"(?<= )", sentence):
-        if measure(cur) + measure(piece) > max_chars and cur:
+        if measure(cur) + measure(piece) > limit and cur:
             chunks.append(cur.strip())
             cur = piece
         else:
@@ -378,9 +389,14 @@ def _hard_split(sentence, max_chars):
     # last resort: a single "word" longer than the budget — still cluster-cut
     final = []
     for c in chunks:
-        while measure(c) > max_chars * 1.6:
-            final.append(truncate_clusters(c, max_chars).rstrip("…").strip())
-            c = _skip_clusters(c, max_chars).strip()
+        guard = 0
+        while measure(c) > limit and guard < 64:
+            guard += 1
+            head = "".join(split_clusters(c)[:max(1, int(limit))]).strip()
+            if not head:
+                break
+            final.append(head)
+            c = _skip_clusters(c, max(1, int(limit))).strip()
         if c:
             final.append(c)
     return [f for f in final if f]
@@ -477,6 +493,74 @@ def strip_emoji_and_marks(text):
     for i, seg in enumerate(protected):
         t = t.replace("\x00%d\x00" % i, seg)
     return t
+
+
+_BRACKET_OPEN = "[[[]"
+_BRACKET_CLOSE = "]]]"
+
+
+def validate_script(text, style=None, width=1080, height=1920):
+    """Everything that would make a caption render wrong — reported, never fixed silently.
+
+    Returns ``{"ok", "errors", "warnings", "stats"}``. Errors mean "this will not
+    render as asked" (unbalanced ``[[silent: …]]`` so the words would be spoken,
+    or a character the selected font cannot draw); warnings mean "this renders,
+    but read it first" (a word wider than the frame, a scene longer than the
+    caption box, a Latin word the Khmer font will substitute).
+
+    Nothing here edits the script: writing the wording is the Director's job.
+    """
+    errors, warnings = [], []
+    raw = str(text or "")
+    opens = raw.count("[[")
+    closes = raw.count("]]")
+    # single brackets are also meaningful to the app (Stage-1 fallback strips
+    # them), so only count the doubled form and the leftovers it implies
+    single_open = len(re.findall(r"(?<!\[)\[(?!\[)", raw))
+    single_close = len(re.findall(r"(?<!\])\](?!\])", raw))
+    if opens != closes:
+        errors.append(f"unbalanced [[ … ]] markup: {opens} '[[' vs {closes} ']]' — "
+                      f"the words inside will be spoken and the brackets hidden")
+    if single_open or single_close:
+        warnings.append(f"{single_open + single_close} single bracket(s) found — they are "
+                        f"stripped from the spoken line; use [[silent: …]] for display-only text")
+
+    clean = normalize_block(display_text(raw))
+    stats = {"chars": char_len(clean), "clusters": cluster_len(clean),
+             "sentences": len(split_sentences(clean)), "has_khmer": is_khmer(clean),
+             "has_silent": has_silent_markup(raw),
+             "script_matches_display": bool(equal_text(join_sentences(split_sentences(clean)), raw))}
+    if not clean:
+        errors.append("the script is empty")
+    if clean and not is_khmer(clean):
+        warnings.append("this script has almost no Khmer script — check the language")
+    if "[[" in clean or "]]" in clean:
+        errors.append("unsupported markup remains after [[silent: …]] handling")
+
+    # mixing Khmer and Latin in one line is fine, but not with all-caps Latin runs
+    if re.search(r"[A-Z]{4,}", clean):
+        warnings.append("long ALL-CAPS Latin run — the Khmer font has Latin glyphs but "
+                        "they are narrower; check the preview")
+
+    try:
+        from . import caption_style as cs_mod
+        from . import captions  # noqa: F401  (avoids a heavier import at module load)
+        style = cs_mod.normalize_style(style or {}, strict=False)
+        gaps = captions.coverage_gaps(clean, style)
+        if gaps.get("missing"):
+            fam = gaps.get("family", gaps.get("font"))
+            errors.append(f"{fam} has no glyph for {' '.join(repr(c) for c in gaps['missing'][:6])} "
+                          f"— pick another bundled font for those characters")
+        for sent in split_sentences(clean):
+            fit = captions.fit_text(sent, style, width, height)
+            if any("needs" in w or "auto-reduced" in w for w in fit["warnings"]):
+                warnings.extend(f"{sent[:24]}…: {w}" for w in fit["warnings"]
+                                if "needs" in w or "dominant" in w)
+    except Exception as e:                       # never make the editor unusable
+        warnings.append(f"font check skipped: {e}")
+
+    return {"ok": not errors, "errors": sorted(set(errors)),
+            "warnings": sorted(set(warnings)), "stats": stats}
 
 
 def looks_like_markdown_or_notes(text):

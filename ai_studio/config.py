@@ -22,6 +22,7 @@ import os
 import shutil
 import subprocess
 
+from . import caption_style as caption_style_mod
 from . import style as style_mod
 from .util import clamp, read_json, write_json
 
@@ -68,7 +69,8 @@ DEFAULTS = {
         },
     },
     "tts": {                                        # Stage 3a
-        "engine": "auto",                           # auto | sherpa | piper | kokoro | placeholder
+        "engine": "auto",                           # auto | sherpa | edge | piper | kokoro | placeholder
+        "allow_online": False,                      # edge-tts sends the script text to Microsoft
         "model_dir": "models/tts/vits-mms-khm",     # sherpa-onnx VITS dir (model.onnx + tokens.txt)
         "sherpa_cli": "",                           # path to sherpa-onnx-offline-tts (optional)
         "language": "km",
@@ -157,6 +159,12 @@ DEFAULTS = {
         "downscale_on_pressure": True,              # halve frames/res before failing
         "max_scene_seconds_for_model": 14,          # longer than this → split into 2 clips
     },
+    # ---------------------------------------------------------------- captions
+    # Validated by ai_studio/caption_style.py; rendered by ai_studio/captions.py.
+    # `caption_style` is the studio-wide default; a project may override it in
+    # projects.settings_json.caption_style (see docs/KHMER-CAPTIONS.md).
+    "caption_style": dict(caption_style_mod.DEFAULT_STYLE),
+    "karaoke": {"enabled": False, "color": "#FFD84D"},
     "pipeline": {
         "scene_target_seconds": style_mod.SCENE_TARGET_SECONDS,
         "scene_min_seconds": style_mod.SCENE_MIN_SECONDS,
@@ -184,7 +192,8 @@ DEFAULTS = {
         "fade_sec": 0.35,
         "transition": "crossfade",                  # crossfade | cut
         "burn_captions": False,
-        "subtitle_style": "clean",                  # clean | bold_yellow | minimal_top | karaoke
+        "subtitle_style": "clean",                  # legacy key (maps onto a preset below)
+        "caption_seconds_per_cue": 3.4,             # ~reading time for one caption block
         "title_style": "",                          # '' = no card | centered_fade | bottom_left_minimal | bold_pop
         "title_text": "",                           # '' = use project title
     },
@@ -243,6 +252,34 @@ def _coerce(cfg):
     title_style = str(c.get("assembly", {}).get("title_style") or "")
     if title_style not in _ttl_keys:
         c["assembly"]["title_style"] = ""
+    # caption style: repaired, not rejected — an old settings file must never
+    # stop the studio from starting, but the renderer only ever sees valid values
+    try:
+        raw_style = c.get("caption_style")
+        fixed = caption_style_mod.normalize_style(raw_style, strict=False)
+        c["caption_style"] = fixed
+        c["assembly"]["caption_style"] = fixed
+        c.setdefault("karaoke", {})
+        c["karaoke"]["enabled"] = bool((c["karaoke"] or {}).get("enabled", False))
+        try:
+            c["karaoke"]["color"] = caption_style_mod.parse_color(
+                (c["karaoke"] or {}).get("color") or "#FFD84D", "karaoke.color")
+        except caption_style_mod.CaptionStyleError:
+            c["karaoke"]["color"] = "#FFD84D"
+        c["assembly"]["caption_seconds_per_cue"] = clamp(
+            float(c["assembly"].get("caption_seconds_per_cue", 3.4) or 3.4), 1.0, 10.0)
+        # the legacy key still selects the *style* if no explicit style was saved
+        if raw_style in (None, {}, ""):
+            c["caption_style"] = caption_style_mod.preset_style(
+                "clean" if sub_style not in ("bold_yellow", "minimal_top") else
+                ("bold-social" if sub_style == "bold_yellow" else "editorial"))
+            c["assembly"]["caption_style"] = c["caption_style"]
+        if sub_style == "karaoke" and not (c.get("karaoke") or {}).get("enabled"):
+            # ...and the legacy karaoke key still means "highlight words as spoken"
+            c["karaoke"]["enabled"] = True
+    except Exception:
+        c["caption_style"] = caption_style_mod.preset_style("clean")
+        c["assembly"]["caption_style"] = c["caption_style"]
     c["pipeline"]["scene_target_seconds"] = clamp(c["pipeline"].get("scene_target_seconds"), 2.5, 20.0)
     c["pipeline"]["scene_min_seconds"] = min(c["pipeline"]["scene_min_seconds"],
                                              c["pipeline"]["scene_target_seconds"])
@@ -473,9 +510,15 @@ def resolve(cfg):
         plan[stage] = {"engine": fallback, "reason": f"no engine available → {fallback}",
                        "run": True}
 
-    pick("tts", ["sherpa", "piper", "kokoro", "placeholder"],
-         [("sherpa", "sherpa_tts"), ("piper", "piper"), ("kokoro", "kokoro"), ("placeholder", None)],
-         {"sherpa": "sherpa_tts", "piper": "piper", "kokoro": "kokoro"})
+    pick("tts", ["sherpa", "edge", "piper", "kokoro", "placeholder"],
+         [("sherpa", "sherpa_tts"), ("edge", "edge_tts"), ("piper", "piper"),
+          ("kokoro", "kokoro"), ("placeholder", None)],
+         {"sherpa": "sherpa_tts", "edge": "edge_tts", "piper": "piper", "kokoro": "kokoro"})
+    if plan["tts"]["engine"] == "edge" and not cfg["tts"].get("allow_online"):
+        # opt-in: the edge client sends the script text to Microsoft's service
+        plan["tts"] = {"engine": "placeholder", "run": True,
+                       "reason": "'edge' needs tts.allow_online = true (the script text is "
+                                 "sent to Microsoft's speech service) → placeholder"}
     pick("rvc", ["http", "cli", "bypass"],
          [("http", "rvc_http"), ("cli", "rvc_cli"), ("bypass", None)],
          {"http": "rvc_http", "cli": "rvc_cli"})
@@ -500,6 +543,17 @@ def resolve(cfg):
                             "comfyui": bool(caps.get("comfyui")),
                             "workflow": (cfg.get("illustration") or {}).get("workflow")}
 
+    try:
+        from . import captions as captions_mod
+
+        ccaps = captions_mod.capabilities(cfg, refresh=True)
+        plan["captions"] = {"ok": ccaps["ok"], "libass": ccaps["libass"],
+                            "shaping": ccaps["shaping"], "fonts": ccaps["fonts"],
+                            "problems": ccaps["problems"],
+                            "style": cfg.get("caption_style")}
+    except Exception as e:                     # never block the studio on this probe
+        plan["captions"] = {"ok": False, "problems": [f"caption probe failed: {e}"],
+                            "fonts": [], "libass": False, "shaping": "unknown"}
     plan["ollama"] = {"available": bool(caps.get("ollama")),
                       "reason": "online" if caps.get("ollama") else "Ollama offline — deterministic fallbacks"}
     plan["ffmpeg"] = {"available": bool(caps.get("ffmpeg"))}
@@ -531,6 +585,12 @@ def capabilities(cfg=None):
     out["sherpa_cli"] = bool(shutil.which("sherpa-onnx-offline-tts")
                              or (cfg["tts"].get("sherpa_cli") and os.path.exists(cfg["tts"]["sherpa_cli"])))
     out["piper"] = shutil.which("piper") is not None or _module_present("piper")
+    # edge-tts: an UNOFFICIAL client for Microsoft's online speech service. It is
+    # opt-in (`tts.allow_online` + `tts.engine = "edge"`) because the script text
+    # leaves the machine; no key is required, but there is no SLA and no licence
+    # to reuse the audio commercially — the UI says so next to the option.
+    out["edge_tts"] = _module_present("edge_tts")
+    out["edge_tts_optin"] = bool(cfg["tts"].get("allow_online"))
     out["kokoro"] = (os.path.exists(os.path.join(root, "kokoro-v0_19.onnx"))
                      and os.path.exists(os.path.join(root, "voices.bin")))
     # RVC

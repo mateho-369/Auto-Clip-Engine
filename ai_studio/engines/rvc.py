@@ -73,8 +73,14 @@ def discover_profiles(cfg):
 
 
 # ------------------------------------------------------------------ conversion
-def convert(in_wav, out_wav, cfg, profile=None, progress=None):
-    """Convert the base TTS wav to the user's timbre. Never raises."""
+def convert(in_wav, out_wav, cfg, profile=None, progress=None, source_engine=""):
+    """Convert the base TTS wav to the user's timbre. Never raises.
+
+    ``source_engine`` is the name of the engine that actually produced ``in_wav``
+    (sherpa-onnx VITS, edge-tts, placeholder…). It is only used to make the
+    bypass message truthful: the old text always said "the MMS Khmer voice" even
+    when the audio had come from somewhere else entirely.
+    """
     r = cfg.get("rvc", {})
     if not r.get("enabled", True):
         return {"ok": True, "engine": "off", "converted": False,
@@ -88,7 +94,7 @@ def convert(in_wav, out_wav, cfg, profile=None, progress=None):
         elif choice == "cli":
             res = _cli_convert(in_wav, out_wav, cfg, profile, progress, attempts)
         else:
-            res = _bypass(in_wav, out_wav, cfg, profile, attempts)
+            res = _bypass(in_wav, out_wav, cfg, profile, attempts, source_engine)
         if res.get("ok"):
             return res
     return {"ok": False, "engine": "bypass", "converted": False,
@@ -272,18 +278,21 @@ def _cli_convert(in_wav, out_wav, cfg, profile, progress, attempts):
             "duration": media_duration(out_wav, 0)}
 
 
-def _bypass(in_wav, out_wav, cfg, profile, attempts):
+def _bypass(in_wav, out_wav, cfg, profile, attempts, source_engine=""):
     """No converter: copy the 3a audio, optionally nudge pitch/formant with ffmpeg.
 
     This keeps Machine B / untrained users moving — but it reports
-    `converted: false` so nobody mistakes it for their own voice.
+    `converted: false` so nobody mistakes it for their own voice, and it names
+    the engine that really produced the audio it is passing through.
     """
     r = cfg.get("rvc", {})
     semis = float(r.get("pitch") or 0)
     formant = float(r.get("formant_shift") or 0)
     ensure_dir(os.path.dirname(out_wav) or ".")
+    src = str(source_engine or "").strip()
+    src_txt = f"the {src} voice" if src and src != "bypass" else "the Stage-3a voice"
     reason = ("; ".join(attempts) if attempts else
-              "no RVC back-end available — using the MMS Khmer voice directly")
+              f"no RVC back-end available — keeping {src_txt} directly (no timbre conversion)")
     if abs(semis) < 0.05 and abs(formant) < 0.01:
         shutil.copyfile(in_wav, out_wav)
         return {"ok": True, "engine": "bypass", "converted": False, "reason": reason,

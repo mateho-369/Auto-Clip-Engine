@@ -25,13 +25,16 @@ SR = 44100
 
 def probe(path):
     """{duration, width, height, fps} for a video file — best effort."""
+    # `decode("ignore")` is a LookupError — the first positional argument of
+    # bytes.decode is the encoding, not the error handler. That typo made this
+    # function return 0x0/fps=0 for every video, silently.
     out = {"duration": media_duration(path, 0.0), "width": 0, "height": 0, "fps": 0.0}
     ff = ffmpeg_exe()
     if not ff or not path or not os.path.exists(path):
         return out
     try:
         res = subprocess.run([ff, "-hide_banner", "-i", path], capture_output=True, timeout=60)
-        txt = (res.stderr or b"").decode(errors="ignore")
+        txt = (res.stderr or b"").decode("utf-8", "ignore")
         m = re.search(r"Video:.*?(\d{2,5})x(\d{2,5})", txt)
         if m:
             out["width"], out["height"] = int(m.group(1)), int(m.group(2))
@@ -366,38 +369,55 @@ def thumbnail(video, dst_png, at_sec=0.6, width=320):
 
 
 # ------------------------------------------------------ subtitle / title styles
-# Style library replacing the single hardcoded force_style string. Each entry
-# is the full libass inline style (or karaoke metadata) the frontend's Style
-# Gallery shows by *preview*, never by name alone.
-SUBTITLE_STYLE_KEYS = ("clean", "bold_yellow", "minimal_top", "karaoke")
-_SUB_BASE = "FontName=Khmer OS Battambang,FontSize=15,PrimaryColour=&H00FFFFFF," \
-            "OutlineColour=&HC0000000,BorderStyle=1,Outline=2,Shadow=0,MarginV=56," \
-            "MarginL=28,MarginR=28,Alignment=2"
-SUBTITLE_STYLES = {
-    "clean": {"label": "Clean", "desc": "Today's look — white, centred, soft outline.",
-              "force_style": _SUB_BASE, "karaoke": False},
-    "bold_yellow": {"label": "Bold yellow",
-                    "desc": "High-contrast bold yellow — readable over bright b-roll.",
-                    "force_style": "FontName=Khmer OS Battambang,FontSize=17,"
-                                   "PrimaryColour=&H0000FFFF,Bold=1,"
-                                   "OutlineColour=&H80000000,BorderStyle=1,Outline=3,"
-                                   "Shadow=1,MarginV=56,MarginL=24,MarginR=24,Alignment=2",
-                    "karaoke": False},
-    "minimal_top": {"label": "Minimal top",
-                    "desc": "Small clean text pinned at the top — leaves the picture open.",
-                    "force_style": "FontName=Khmer OS Battambang,FontSize=13,"
-                                   "PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,"
-                                   "BorderStyle=1,Outline=1,Shadow=0,MarginV=36,MarginL=28,"
-                                   "MarginR=28,Alignment=8",
-                    "karaoke": False},
-    "karaoke": {"label": "Karaoke", "desc": "Word-by-word highlight (proportional timing).",
-                "force_style": "FontName=Khmer OS Battambang,FontSize=15,"
-                               "PrimaryColour=&H0000FFFF,Bold=1,"
-                               "SecondaryColour=&H00FFFFFF,OutlineColour=&HC0000000,"
-                               "BorderStyle=1,Outline=2,Shadow=0,MarginV=56,MarginL=28,"
-                               "MarginR=28,Alignment=2",
-                "karaoke": True},
+# The old style library here was a `force_style` *string* per key, with the font
+# name "Khmer OS Battambang" hardcoded in it. That font is not bundled and not
+# installed on most machines, so libass substituted an arbitrary font and the
+# Khmer text came out as empty boxes. Styles are now real dicts
+# (ai_studio/caption_style.py) rendered by ai_studio/captions.py, and these two
+# names survive only as the legacy keys the UI and old settings may still hold.
+LEGACY_STYLE_KEYS = {
+    "clean": "clean",
+    "bold_yellow": "bold-social",
+    "minimal_top": "editorial",
+    "karaoke": "clean",
 }
+SUBTITLE_STYLE_KEYS = tuple(LEGACY_STYLE_KEYS)
+
+
+def subtitle_style(key, karaoke=False):
+    """Legacy style key → a validated caption-style dict (never a font blob).
+
+    Unknown keys fall back to the studio default *and* say so in the render
+    metadata; they never silently pick a font that might not exist.
+    """
+    from . import caption_style as cs
+
+    preset = LEGACY_STYLE_KEYS.get(str(key or "clean"), "clean")
+    style = cs.preset_style(preset)
+    if karaoke:
+        style = {**style, "karaoke": {"enabled": True, "color": "#FFD84D"}}
+    return style
+
+
+def SUBTITLE_STYLES_payload():
+    """What `GET /api/settings` reports (labels + the real parameters)."""
+    from . import caption_style as cs
+
+    out = {}
+    for legacy, preset in LEGACY_STYLE_KEYS.items():
+        p = cs.PRESETS[preset]
+        style = cs.preset_style(preset)
+        if legacy == "karaoke":
+            # the legacy key meant "word-by-word highlight" — keep that meaning by
+            # carrying the karaoke settings in the style dict itself
+            style = {**style, "karaoke": {"enabled": True, "color": "#FFD84D"}}
+        out[legacy] = {"label": p["label"] + (" · word highlight" if legacy == "karaoke" else ""),
+                       "desc": p["desc"], "preset": preset, "style": style,
+                       "legacy": True, "karaoke": bool(legacy == "karaoke")}
+    return out
+
+
+SUBTITLE_STYLES = None      # built lazily by SUBTITLE_STYLES_payload()
 TITLE_STYLE_KEYS = ("centered_fade", "bottom_left_minimal", "bold_pop")
 TITLE_STYLES = {
     "centered_fade": {"label": "Centered fade",
@@ -413,151 +433,86 @@ TITLE_STYLES = {
 
 
 def subtitle_force_style(style_key):
-    st = SUBTITLE_STYLES.get(style_key or "clean", SUBTITLE_STYLES["clean"])
-    return st["force_style"]
+    """Deprecated shim: legacy key → the ASS style line used by the new renderer.
 
-
-def _fmt_ass_time(sec):
-    sec = max(0.0, float(sec))
-    h = int(sec // 3600)
-    m = int((sec % 3600) // 60)
-    s = sec % 60
-    return f"{h}:{m:02d}:{int(s):02d}.{int(round((s % 1) * 100)):02d}"
-
-
-def words_for_timing(text):
-    """(word, weight) list for karaoke timing.
-
-    Khmer is *scriptio continua*: when a sentence has spaces we use them as
-    word separators (the studio's scripts do); otherwise we fall back to
-    character-cluster groups of 2, which are the smallest pieces a viewer can
-    plausibly read. Weight = the same syllable estimate the whole pipeline
-    uses for pacing, so the karaoke sweep and the spoken rhythm agree.
+    Kept only so old callers/notebooks do not explode; new code passes a caption
+    style dict (``ai_studio/caption_style.py``) to :mod:`ai_studio.captions`.
     """
-    from . import khmer
+    from . import captions
 
-    t = khmer.display_text(text or "")
-    if not t:
-        return []
-    if khmer.is_khmer(t):
-        toks = [w for w in re.split(r"\s+", t) if w]
-        if len(toks) > 1 or " " in t:
-            return [(w, max(0.2, khmer.syllable_estimate(w))) for w in toks]
-        units = khmer.split_clusters(t)
-        words, cur = [], []
-        for u in units:
-            cur.append(u)
-            if len(cur) >= 2:
-                words.append("".join(cur))
-                cur = []
-        if cur:
-            words.append("".join(cur))
-        return [(w, max(0.2, khmer.syllable_estimate(w))) for w in words]
-    toks = re.split(r"\s+", t)
-    return [(w, max(1, len(re.findall(r"[aeiouy]+", w, re.I)))) for w in toks if w]
+    style = subtitle_style(style_key)
+    return captions.ass_style_line(style, 1920, 1080, karaoke=False)
 
 
 def write_karaoke_ass(scene_windows, dst, style="karaoke", width=480, height=854):
-    """ASS with ``\\k`` karaoke tags — burned by the same libass `subtitles`
-    filter (it supports karaoke natively).
+    """ASS with ``\\k`` karaoke tags — burned by the same libass filter.
 
     Timing is an honest approximation: sherpa-onnx gives no real word
     timestamps, so each scene's known audio window is distributed across its
     words proportionally to :func:`khmer.syllable_estimate` weight. This is
-    NOT forced alignment — see README-STUDIO.md (real ASR alignment is the
-    documented future upgrade).
+    NOT forced alignment and the render metadata says so. Wrapping is shared
+    with the normal captions, so a karaoke line can no more split a coeng
+    stack than a plain one.
     """
-    from . import khmer
+    from . import captions
 
-    st = SUBTITLE_STYLES.get(style, SUBTITLE_STYLES["karaoke"])
-    lines = [
-        "[Script Info]",
-        "ScriptType: v4.00+",
-        f"PlayResX: {int(width)}", f"PlayResY: {int(height)}",
-        "WrapStyle: 0", "ScaledBorderAndShadow: yes",
-        "",
-        "[V4+ Styles]",
-        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
-        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, "
-        "Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, "
-        "Encoding",
-        f"Style: Default,{st.get('font', 'Khmer OS Battambang')},15,"
-        f"{st.get('primary', '&H00FFFFFF')},{st.get('secondary', '&H0000FFFF')},"
-        f"{st.get('outline', '&HC0000000')},&H80000000,{int(st.get('bold', 1))},0,0,0,100,100,0,0,"
-        f"1,2,1,2,28,28,56,1",
-        "",
-        "[Events]",
-        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
-    ]
+    cstyle = subtitle_style(style, karaoke=True)
+    cues = []
     for start, end, text in scene_windows:
-        words = words_for_timing(text)
-        weights = [w for _w, w in words]
-        total = sum(weights) or 1.0
         span = max(0.4, float(end) - float(start))
-        cums, acc = [], 0.0
-        for w in weights:
+        words = words_for_timing(text)
+        total = sum(w for _t, w in words) or 1.0
+        acc, timed = 0.0, []
+        for word, w in words:
+            s0 = float(start) + span * acc / total
             acc += w
-            cums.append(span * acc / total)
-        tags = []
-        prev = 0.0
-        for (word, _w), cum in zip(words, cums):
-            k = max(1, int(round((cum - prev) * 100)))
-            tags.append(f"{{\\k{k}}}{word}")
-            prev = cum
-        text_line = " ".join(tags)
-        # manual line wrap (spaceless script) using cluster breaks
-        wrapped = khmer.wrap_clusters(text_line, max_clusters=64)
-        text_line = "\\N".join(wrapped)
-        lines.append(f"Dialogue: 0,{_fmt_ass_time(start)},{_fmt_ass_time(end)},Default,,0,0,0,,{text_line}")
-    ensure_dir(os.path.dirname(dst) or ".")
-    with open(dst, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
-    return dst
+            s1 = float(start) + span * acc / total
+            timed.append((word, s0, s1))
+        cues.append({"text": khmer.display_text(text), "start": float(start),
+                     "end": float(end), "words": timed})
+    return captions.write_ass(cues, cstyle, width, height, dst, karaoke=cstyle["karaoke"])
 
 
-def burn_subtitles(video, srt, dst, force_style="FontName=Khmer OS Battambang,FontSize=15,PrimaryColour=&H00FFFFFF,OutlineColour=&HC0000000,BorderStyle=1,Outline=2,Shadow=0,MarginV=56,MarginL=28,MarginR=28,Alignment=2",
-                   style="clean"):
-    """Only used when assembly.burn_captions is on and libass is available.
+def burn_subtitles(video, srt, dst, force_style="", style="clean", caption_style=None,
+                   karaoke=None):
+    """Burn captions through the studio's single renderer (``ai_studio.captions``).
 
-    Font choice matters here, not just cosmetically: this Windows ffmpeg
-    build's libass won't discover installed system fonts on its own (no
-    `fontsdir` = it silently falls back to *something*, and with "Noto Sans
-    Khmer" specifically that fallback doesn't shape Khmer script correctly —
-    dependent vowels and coeng-stacked consonants render unshaped, reading as
-    scrambled text even though the underlying SRT is correct). Pointing
-    fontsdir at the Windows font directory and picking a font confirmed (by
-    rendering a test frame) to shape correctly fixes it.
+    ``force_style`` is accepted for backwards compatibility but IGNORED — the
+    old behaviour injected a raw libass style string naming a font that is not
+    bundled ("Khmer OS Battambang"), and libass then silently substituted a
+    font that cannot shape Khmer, which is how the reported "tofu" frames were
+    produced. Captions now always come from a validated style dict, so what the
+    UI previewed is what lands in the MP4.
+
+    Raises :class:`ai_studio.captions.CaptionError` when the burn is impossible
+    (no libass, missing bundled font) — the caller must surface that instead of
+    shipping an uncaptioned file.
     """
-    if not _has_filter("subtitles"):
-        raise RuntimeError("this ffmpeg build has no 'subtitles' filter (needs libass) — "
-                           "keep SRT as a sidecar file instead")
-    srt_esc = str(srt).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
-    vf = f"subtitles='{srt_esc}'"
-    fontsdir = os.environ.get("SystemRoot", r"C:\Windows") + r"\Fonts" if os.name == "nt" else ""
-    if fontsdir and os.path.isdir(fontsdir):
-        vf += f":fontsdir='{fontsdir.replace(chr(92), '/').replace(':', chr(92) + ':')}'"
-    if style and style not in ("clean",) and style in SUBTITLE_STYLES:
-        force_style = subtitle_force_style(style)
-    vf += f":force_style='{force_style}'"
-    run_ffmpeg(["-i", video, "-vf", vf,
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-c:a", "copy", dst],
-               timeout=3600)
-    return dst
+    from . import captions, caption_style as cs
+
+    style_dict = caption_style or (cs.normalize_style(caption_style or {}, strict=False)
+                                   if isinstance(caption_style, dict) else None)
+    if style_dict is None:
+        style_dict = subtitle_style(style, karaoke=bool(karaoke))
+    cues = captions.parse_srt(srt)
+    if not cues:
+        raise captions.CaptionError(f"no cues found in {srt}")
+    info = captions.probe_size(video)
+    w, h = info["width"] or 1920, info["height"] or 1080
+    ass = os.path.splitext(dst)[0] + ".ass"
+    captions.write_ass(cues, style_dict, w, h, ass,
+                       karaoke=karaoke or style_dict.get("karaoke"))
+    return captions.burn(video, ass, dst, style_dict)
 
 
-def burn_ass(video, ass, dst, style="karaoke"):
-    """Burn an .ass file (karaoke ``\\k`` tags) via the same libass filter."""
-    if not _has_filter("subtitles"):
-        raise RuntimeError("this ffmpeg build has no 'subtitles' filter (needs libass)")
-    ass_esc = str(ass).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
-    vf = f"subtitles='{ass_esc}'"
-    fontsdir = os.environ.get("SystemRoot", r"C:\Windows") + r"\Fonts" if os.name == "nt" else ""
-    if fontsdir and os.path.isdir(fontsdir):
-        vf += f":fontsdir='{fontsdir.replace(chr(92), '/').replace(':', chr(92) + ':')}'"
-    run_ffmpeg(["-i", video, "-vf", vf,
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-c:a", "copy", dst],
-               timeout=3600)
-    return dst
+def burn_ass(video, ass, dst, style="karaoke", caption_style=None):
+    """Burn a prepared .ass (karaoke ``\\k`` tags or plain) with bundled fonts."""
+    from . import captions, caption_style as cs
+
+    style_dict = caption_style if isinstance(caption_style, dict) else None
+    if style_dict is None:
+        style_dict = cs.normalize_style({}, strict=False) if style is None else subtitle_style(style)
+    return captions.burn(video, ass, dst, style_dict)
 
 
 # -------------------------------------------------------------- title cards
@@ -741,33 +696,29 @@ def _split_sentences(text):
     return parts or [text]
 
 
-def write_srt(scene_texts, scene_starts, dst, words_per_line=6):
-    """Khmer-safe SRT: one sentence per caption block, time-sliced within the
-    scene's window (word timing on Khmer is unreliable — it has no spaces —
-    so sentence, not word, is the smallest unit we sync to), each block
-    manually line-wrapped since libass can't auto-wrap spaceless script."""
-    def fmt(sec):
-        sec = max(0.0, float(sec))
-        h = int(sec // 3600)
-        m = int((sec % 3600) // 60)
-        s = sec % 60
-        return f"{h:02d}:{m:02d}:{int(s):02d},{int(round((s % 1) * 1000)):03d}"
+def write_srt(scene_texts, scene_starts, dst, ends=None, style=None,
+              width=1920, height=1080):
+    """Khmer-safe SRT written by the same renderer that burns the video.
 
-    blocks = []
-    n = 0
-    for i, (txt, start) in enumerate(zip(scene_texts, scene_starts)):
-        end = scene_starts[i + 1] if i + 1 < len(scene_starts) else start + 3.0
-        end = max(end, start + 0.8)
-        sentences = _split_sentences(txt)
-        span = (end - start) / len(sentences)
-        for j, sent in enumerate(sentences):
-            s0, s1 = start + j * span, start + (j + 1) * span
-            n += 1
-            blocks.append(f"{n}\n{fmt(s0)} --> {fmt(s1)}\n{_wrap_khmer(sent)}\n")
-    ensure_dir(os.path.dirname(dst) or ".")
-    with open(dst, "w", encoding="utf-8") as f:
-        f.write("\n".join(blocks))
-    return dst
+    * wraps with *shaped pixel measurement* (HarfBuzz) and never inside a Khmer
+      cluster — the previous writer cut ``ខ្លួន។`` into ``ខ្លួ`` + ``ន។``;
+    * ends the last cue at its real end (``ends``), never at ``start + 3s``;
+    * splits a scene into sentence-sized cues and keeps ``[[silent: …]]`` words
+      on screen while they stay out of the spoken audio.
+    """
+    from . import captions, khmer
+
+    starts = [float(s) for s in scene_starts]
+    if ends is None:
+        # legacy callers pass only starts: use the next start, and for the final
+        # scene the estimated speech duration (never a bare fixed 3s that can
+        # cut the last line short or leave it on screen after the audio ends)
+        ends = [starts[i + 1] if i + 1 < len(starts)
+                else starts[i] + max(1.2, khmer.estimate_speech_seconds(scene_texts[i]))
+                for i in range(len(starts))]
+    cues = captions.cues_from_scenes([khmer.display_text(t) for t in scene_texts],
+                                     starts, [float(e) for e in ends], style=style)
+    return captions.write_srt(cues, dst, style=style, width=width, height=height)
 
 
 def extract_audio(video, dst_wav, sr=SR):

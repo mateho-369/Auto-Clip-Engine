@@ -71,11 +71,18 @@ def sherpa_bin(cfg):
 
 def available_engines(cfg):
     """What this machine can do right now (used by /api/status and the settings UI)."""
+    try:
+        import edge_tts  # noqa: F401
+        edge_ok = True
+    except Exception:
+        edge_ok = False
     out = {"sherpa_model": bool(resolve_model(cfg)[0]),
            "sherpa_python": _python_api(),
            "sherpa_cli": bool(sherpa_bin(cfg)),
            "piper": bool(shutil.which("piper")),
            "kokoro": False,
+           "edge_tts": edge_ok,
+           "edge_tts_optin": bool((cfg.get("tts") or {}).get("allow_online")),
            "placeholder": True}
     try:
         from ai_creator.voice import kokoro_available
@@ -168,12 +175,22 @@ def synthesize(text, out_wav, cfg, engine="auto", progress=None, seed=0):
     if not text:
         return {"ok": False, "reason": "empty text (all silent markup)", "engine": "none"}
     ensure_dir(os.path.dirname(out_wav) or ".")
-    want = engine if engine in ("sherpa", "piper", "kokoro", "placeholder") else "auto"
-    chain = (["sherpa", "piper", "kokoro", "placeholder"] if want == "auto" else [want, "placeholder"])
+    want = engine if engine in ("sherpa", "edge", "piper", "kokoro", "placeholder") else "auto"
+    if want == "auto":
+        chain = ["sherpa"]
+        # edge-tts is only ever used when BOTH the Director and the settings say so:
+        # it is an unofficial client that sends the script text to Microsoft.
+        if cfg_t.get("allow_online"):
+            chain.append("edge")
+        chain += ["piper", "kokoro", "placeholder"]
+    else:
+        chain = [want, "placeholder"]
     attempts = []
     for choice in chain:
         if choice == "sherpa":
             res = _try_sherpa(text, out_wav, cfg, progress, attempts)
+        elif choice == "edge":
+            res = _try_edge(text, out_wav, cfg, attempts)
         elif choice == "piper":
             res = _try_piper(text, out_wav, cfg, progress, attempts)
         elif choice == "kokoro":
@@ -320,6 +337,73 @@ def _stitch(parts, out_wav, gap=0.1, crossfade_ms=30):
     return out_wav
 
 
+def _try_edge(text, out_wav, cfg, attempts):
+    """Optional ONLINE Khmer voice via the unofficial ``edge-tts`` client.
+
+    Disclosed, opt-in and never a silent default: with it, the scene text is sent
+    to Microsoft's speech service. It needs no API key and is free *today*, but
+    it is not an official API, has no SLA, and the returned audio carries no
+    commercial-reuse grant — the settings UI says exactly that next to the
+    toggle, and every asset it produces is tagged ``engine: edge-tts`` +
+    ``real_speech: true`` + ``online: true`` so the manifest is honest about it.
+    """
+    t = cfg.get("tts", {})
+    if not t.get("allow_online"):
+        attempts.append("edge: disabled (tts.allow_online is false — the text would be sent "
+                        "to Microsoft's online speech service)")
+        return {"ok": False}
+    try:
+        import asyncio
+
+        import edge_tts
+    except Exception:
+        attempts.append("edge: the optional 'edge-tts' package is not installed "
+                        "(pip install edge-tts)")
+        return {"ok": False}
+    voice = str(t.get("edge_voice") or "km-KH-SreymomNeural")
+    rate = t.get("edge_rate") or None
+    tmp = out_wav + ".edge.mp3"
+    try:
+        async def _run():
+            kw = {}
+            if rate:
+                kw["rate"] = rate
+            comm = edge_tts.Communicate(khmer.strip_emoji_and_marks(text), voice, **kw)
+            await comm.save(tmp)
+
+        asyncio.run(_run())
+    except Exception as e:
+        attempts.append(f"edge: {str(e)[:160]}")
+        return {"ok": False}
+    if not os.path.exists(tmp) or os.path.getsize(tmp) < 512:
+        attempts.append("edge: service returned no audio")
+        return {"ok": False}
+    _to_wav(tmp, out_wav)
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+    return {"ok": True, "engine": "edge-tts", "model": voice, "real_speech": True,
+            "online": True, "note": f"spoken online by Microsoft's {voice} (unofficial edge-tts "
+                                    f"client) — the script text left this machine",
+            "duration": media_duration(out_wav, 0.0), "chunks": 1}
+
+
+def _to_wav(src, dst_wav, sr=SR_DEFAULT):
+    """Decode any audio file to 16-bit mono wav with ffmpeg."""
+    from ..util import ffmpeg_exe
+
+    ff = ffmpeg_exe()
+    if not ff:
+        raise RuntimeError("ffmpeg is required to convert the downloaded audio")
+    tmp = dst_wav + ".conv.wav"
+    subprocess.run([ff, "-y", "-hide_banner", "-loglevel", "error", "-i", src, "-vn",
+                    "-ac", "1", "-ar", str(sr), "-c:a", "pcm_s16le", tmp],
+                   check=True, timeout=900)
+    shutil.move(tmp, dst_wav)
+    return dst_wav
+
+
 def _try_piper(text, out_wav, cfg, progress, attempts):
     exe = shutil.which("piper")
     model = os.environ.get("PIPER_MODEL", "")
@@ -424,7 +508,15 @@ def probe(cfg):
         est = os.path.getsize(onnx) if onnx else None
     except Exception:
         pass
+    t = cfg.get("tts", {}) if cfg else {}
     return {"engines": eng, "model_dir": d, "model": onnx, "tokens": tokens,
             "model_bytes": est, "sherpa_cli": sherpa_bin(cfg),
             "ready": bool(eng["sherpa_model"] and (eng["sherpa_python"] or eng["sherpa_cli"])),
-            "fallback": "placeholder" if not eng["sherpa_model"] else "none"}
+            "fallback": "placeholder" if not eng["sherpa_model"] else "none",
+            "real_khmer_available": bool(eng["sherpa_model"]) or bool(eng.get("edge_tts")),
+            "edge": {"installed": bool(eng.get("edge_tts")),
+                     "allowed": bool(t.get("allow_online")),
+                     "voice": t.get("edge_voice") or "km-KH-SreymomNeural",
+                     "disclosure": ("unofficial edge-tts client: the script text is sent to "
+                                    "Microsoft's online speech service; no SLA and no "
+                                    "commercial-reuse grant")}}

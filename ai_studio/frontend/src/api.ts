@@ -149,3 +149,129 @@ export interface VoiceProfile {
 }
 
 export const EMPTY_PROJECT = {} as Project;
+
+// ------------------------------------------------- captions / typography
+// The caption style lives in the SAME schema the renderer consumes
+// (ai_studio/caption_style.py): keys here must match DEFAULT_STYLE there.
+export interface CaptionStyle {
+  version?: number;
+  preset: string;
+  font: string;
+  weight: number;
+  font_size_px: number;
+  color: string;
+  outline_color: string;
+  outline_width: number;
+  shadow: number;
+  shadow_color: string;
+  shadow_opacity: number;
+  background: boolean;
+  background_color: string;
+  background_opacity: number;
+  background_padding: number;
+  background_radius: number;
+  position: "bottom" | "center" | "top";
+  alignment: "center" | "left" | "right";
+  margin_h: number;
+  margin_v: number;
+  line_spacing: number;
+  max_lines: number;
+  max_width_pct: number;
+  letter_spacing: number;
+  karaoke?: { enabled: boolean; color: string };
+}
+
+export interface CaptionFont {
+  id: string; family: string; label: string; blurb: string; weights: number[];
+  license: string; bundled: boolean; files: string[]; sample: string;
+}
+
+export interface CaptionPreset {
+  key: string; label: string; desc: string; style: CaptionStyle;
+}
+
+export interface CaptionCapabilities {
+  ok: boolean; libass: boolean; shaping: string; ffmpeg: string | null;
+  fonts: { id: string; family: string; file?: string; weight?: number; ok: boolean; license?: string; error?: string }[];
+  problems: string[]; reference_height: number; font_cache: string;
+}
+
+export interface CaptionBootstrap {
+  fonts: CaptionFont[]; presets: CaptionPreset[];
+  palettes: { colors: { name: string; hex: string }[]; reference_height: number };
+  defaults: CaptionStyle; global_style: CaptionStyle;
+  karaoke: { enabled: boolean; color: string };
+  assembly: { burn_captions?: boolean; emit_srt?: boolean; subtitle_style?: string; caption_seconds_per_cue?: number };
+  capabilities: CaptionCapabilities;
+  reference: { height: number; width: number };
+  precedence: string[];
+}
+
+export interface ProjectCaptions {
+  project_id: string;
+  global_style: CaptionStyle;
+  project_style: CaptionStyle | null;
+  effective_style: CaptionStyle;
+  is_default: boolean;
+  karaoke: { enabled: boolean; color: string };
+  fonts: CaptionFont[];
+  presets: CaptionPreset[];
+  palettes: CaptionBootstrap["palettes"];
+  precedence: string[];
+  changed_fields: string[];
+  capabilities: CaptionCapabilities;
+  reference: { height: number; width: number };
+}
+
+export interface CaptionRenderResult {
+  ok: boolean; asset_id: string; path: string; url: string; download: string;
+  style: CaptionStyle; font: { family: string; file: string; weight: number };
+  warnings: string[]; bounds_warnings: string[]; cues: number; duration: number;
+  source: string; note: string; karaoke: { enabled: boolean; timing: string };
+}
+
+/** POST a caption preview and return an object URL + the render metadata. */
+export async function captionPreview(body: {
+  text?: string; texts?: string[]; style?: Partial<CaptionStyle>; project_id?: string;
+  width?: number; height?: number; at_sec?: number; scene_idx?: number; backdrop?: string;
+  karaoke?: { enabled?: boolean; color?: string };
+}): Promise<{ url: string; blob: Blob; style?: CaptionStyle; font?: any; warnings: string[]; lines?: string[] }> {
+  const r = await fetch("/api/caption-preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    let msg = `HTTP ${r.status}`;
+    try {
+      const d = await r.json();
+      msg = extractDetail(d, r.status);
+    } catch { /* keep the status text */ }
+    throw new ApiError(msg, r.status);
+  }
+  const blob = await r.blob();
+  const parse = (h: string, fb: any) => { try { return JSON.parse(r.headers.get(h) || "") ?? fb; } catch { return fb; } };
+  return {
+    url: URL.createObjectURL(blob),
+    blob,
+    style: parse("X-Caption-Style", undefined),
+    font: parse("X-Caption-Font", undefined),
+    warnings: parse("X-Caption-Warnings", []),
+    lines: parse("X-Caption-Lines", undefined),
+  };
+}
+
+export function fontFaceCss(fonts: CaptionFont[]): string {
+  const out: string[] = [];
+  for (const f of fonts) {
+    for (const file of f.files || []) {
+      const name = file.split(/[\\/]/).pop() || "";
+      const weight = /Bold/i.test(name) ? 700 : /Light|Thin/i.test(name) ? 300 : 400;
+      out.push(
+        `@font-face{font-family:'${f.family}';font-style:normal;font-weight:${weight};` +
+        `font-display:swap;src:url('/api/fonts/${f.id}/${encodeURIComponent(name)}') format('truetype');}`
+      );
+    }
+  }
+  return out.join("\n");
+}

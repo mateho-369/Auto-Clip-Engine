@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api, Asset, Project, Run, Scene, StageRow, StageSpec, StylePreview } from "../api";
+import { TypographyInspector, useStudioFonts } from "./Typography";
 import { useToast, errText } from "../main";
 import { Badge, Bar, Empty, Panel, StatusBadge, fmtDur, fmtSize, fmtTime, Spinner } from "../ui";
 
@@ -8,8 +9,16 @@ interface Live {
   error?: string; deferred_stages?: string[]; final_path?: string; duration?: number;
 }
 
+interface CaptionInfo {
+  asset?: { id: string; path: string; duration?: number; download: string; stream: string } | null;
+  effective_style?: any;
+  has_project_override?: boolean;
+  fonts?: any[];
+}
+
 export function ProjectView({ projectId, onOpen }: { projectId: string; onOpen: (v: string, id?: string) => void }) {
   const [proj, setProj] = useState<Project | null>(null);
+  const [captions, setCaptions] = useState<CaptionInfo | null>(null);
   const [specs, setSpecs] = useState<StageSpec[]>([]);
   const [run, setRun] = useState<Run | null>(null);
   const [live, setLive] = useState<Live | null>(null);
@@ -25,9 +34,29 @@ export function ProjectView({ projectId, onOpen }: { projectId: string; onOpen: 
 
   const load = useCallback(async () => {
     try {
-      const d = await api<{ project: Project; scenes: Scene[]; runs: Run[] }>(`/projects/${projectId}`);
+      const d = await api<{
+        project: Project; scenes: Scene[]; runs: (Run & { overall?: any })[]; assets?: Asset[];
+        captions?: CaptionInfo;
+      }>(`/projects/${projectId}`);
       setProj(d.project);
-      setRun((r) => (r && d.runs?.length && r.id !== d.runs[0].id) ? d.runs[0] : (r || d.runs?.[0] || null));
+      setCaptions(d.captions || null);
+      const latest = d.runs?.[0] || null;
+      setRun((r) => (r && latest && r.id !== latest.id) ? latest : (r || latest));
+      // Hydrate the stage board from the SAVED run. Without this, reopening a
+      // finished project showed every stage as "waiting" because only the live
+      // WebSocket snapshot ever populated `live.stages`.
+      if (latest) {
+        setLive((prev) => (prev?.run_id === latest.id && prev?.stages
+          ? prev
+          : {
+            run_id: latest.id, status: latest.status,
+            stages: latest.stages || [], overall: latest.overall,
+            error: latest.error || undefined,
+            final_path: (latest.assets || d.assets || []).find((x: Asset) => x.kind === "final")?.path,
+          } as Live));
+      } else {
+        setLive(null);
+      }
       const s = await api<{ roles: StageSpec[] }>("/settings");
       setSpecs(s.roles || []);
       const a = await api<{ assets: Asset[] }>("/assets", { query: { project_id: projectId, limit: 300 } });
@@ -150,7 +179,7 @@ export function ProjectView({ projectId, onOpen }: { projectId: string; onOpen: 
           <EventLog log={log} rows={runRows} />
         </div>
         <Inspector proj={proj} scenes={sc} stage={selStage} scene={selScene} assets={assets}
-          rows={runRows} onChanged={load} act={act} busy={busy} specs={stages} />
+          rows={runRows} onChanged={load} act={act} busy={busy} specs={stages} captions={captions} />
       </div>
     </div>
   );
@@ -407,10 +436,10 @@ function EventLog({ log, rows }: { log: any[]; rows: StageRow[] }) {
   );
 }
 
-function Inspector({ proj, scenes, stage, scene, assets, rows, onChanged, act, busy, specs }: {
+function Inspector({ proj, scenes, stage, scene, assets, rows, onChanged, act, busy, specs, captions }: {
   proj: Project; scenes: Scene[]; stage: string; scene: number; assets: Asset[];
   rows: StageRow[]; onChanged: () => void; act: (v: string, p: string, b?: any, ok?: string) => Promise<any>;
-  busy: string; specs: StageSpec[];
+  busy: string; specs: StageSpec[]; captions?: CaptionInfo | null;
 }) {
   const toast = useToast();
   const s = scenes[scene];
@@ -419,6 +448,15 @@ function Inspector({ proj, scenes, stage, scene, assets, rows, onChanged, act, b
   const row = stageRows[0];
   const a = (kind: string) => assets.find((x) => x.scene_idx === scene && x.kind === kind);
   const all = assets.find((x) => x.kind === "final");
+  // A finished run may hold BOTH an uncaptioned master and a captioned cut.
+  // The Final-cut panel used to always pick the uncaptioned one.
+  const captioned = captions?.asset
+    ? assets.find((x) => x.id === captions.asset!.id)
+      || ({ ...(all as Asset), id: captions.asset.id, kind: "final_captions",
+            duration: captions.asset.duration ?? all?.duration ?? 0,
+            path: captions.asset.path } as Asset)
+    : assets.find((x) => x.kind === "final_captions");
+  const shown = captioned || all;
   const zips = {};
 
   const regen = async () => {
@@ -505,21 +543,33 @@ function Inspector({ proj, scenes, stage, scene, assets, rows, onChanged, act, b
           </div>
         </div>
       </Panel>
-      <Panel title="Final cut" scroll>
+      <Panel title="Final cut" scroll
+        right={captioned ? <Badge kind="ok">captions burned in</Badge> : (all ? <Badge kind="warn">no captions</Badge> : null)}>
         <div className="panel-b">
-          {all ? (
+          {shown ? (
             <>
-              <video controls preload="metadata" src={`/api/assets/${all.id}/stream`} />
+              <video controls preload="metadata" src={`/api/assets/${shown.id}/stream`} />
               <div className="row" style={{ marginTop: 6 }}>
-                <a className="btn tiny primary" href={`/api/assets/${all.id}/download`}>⬇ final mp4</a>
+                {/* cap=1 asks the backend for the captioned cut of this project */}
+                <a className="btn tiny primary" href={`/api/assets/${shown.id}/download?cap=1`}>
+                  ⬇ {captioned ? "captioned mp4" : "final mp4"}
+                </a>
+                {all && (
+                  <a className="btn tiny" href={`/api/assets/${all.id}/download?cap=0`}
+                    title="download the version without burned-in captions">⬇ without captions</a>
+                )}
                 <a className="btn tiny" href={`/api/projects/${proj.id}/download?kind=all`}>project zip</a>
                 <a className="btn tiny" href={`/api/projects/${proj.id}/download?kind=bundle`}>.json</a>
               </div>
-              <div className="hint" style={{ marginTop: 6 }}>{fmtDur(all.duration)} · {fmtSize(all.size_bytes)}</div>
+              <div className="hint" style={{ marginTop: 6 }}>
+                {fmtDur(shown.duration)} · {fmtSize(shown.size_bytes)} ·{" "}
+                {captioned ? "this is the captioned render" : "no captioned render for this project yet"}
+              </div>
             </>
           ) : <Empty text="no final cut yet" />}
         </div>
       </Panel>
+      <Typography host={{ projectId: proj.id, onChanged, fonts: captions?.fonts }} />
     </div>
   );
 }
@@ -551,4 +601,16 @@ function ModeBGate({ proj, onOpen, onChanged, act, busy }: {
       </Panel>
     </div>
   );
+}
+
+
+/** Wrapper that loads the bundled @font-face rules and mounts the inspector. */
+function Typography({ host }: { host: { projectId: string; onChanged: () => void; fonts?: any } }) {
+  const [fonts, setFonts] = useState<any[] | undefined>(host.fonts);
+  useEffect(() => {
+    if (fonts?.length) return;
+    api<{ fonts: any[] }>("/caption-style").then((d) => setFonts(d.fonts)).catch(() => {});
+  }, [fonts]);
+  useStudioFonts(fonts);
+  return <TypographyInspector projectId={host.projectId} onChanged={host.onChanged} />;
 }
