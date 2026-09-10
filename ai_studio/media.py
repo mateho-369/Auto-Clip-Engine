@@ -613,14 +613,26 @@ def burn_subtitles(video, srt, dst, force_style="FontName=Khmer OS Battambang,Fo
 
 
 def burn_ass(video, ass, dst, style="karaoke"):
-    """Burn an .ass file (karaoke ``\\k`` tags) via the same libass filter."""
+    """Burn an .ass file (karaoke ``\\k`` tags) via the same libass filter.
+
+    fontsdir always includes the studio's bundled Khmer fonts first, so the
+    families named in the .ass (Noto Sans Khmer, Kantumruy Pro, …) resolve on
+    any machine — Windows included — instead of gambling on system fonts."""
     if not _has_filter("subtitles"):
-        raise RuntimeError("this ffmpeg build has no 'subtitles' filter (needs libass)")
+        raise RuntimeError("this ffmpeg build has no 'subtitles' filter (needs libass) — "
+                           "cannot burn captions with this ffmpeg build")
     ass_esc = str(ass).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
     vf = f"subtitles='{ass_esc}'"
-    fontsdir = os.environ.get("SystemRoot", r"C:\Windows") + r"\Fonts" if os.name == "nt" else ""
-    if not (fontsdir and os.path.isdir(fontsdir)):
-        fontsdir = _shipped_font_dir() or ""
+    shipped = ""
+    try:
+        from .captions import fonts_dir
+        shipped = fonts_dir() if os.path.isdir(fonts_dir()) else ""
+    except Exception:
+        shipped = _shipped_font_dir() or ""
+    win_fonts = os.environ.get("SystemRoot", r"C:\Windows") + r"\Fonts" if os.name == "nt" else ""
+    fontsdir = shipped or (_shipped_font_dir() or "")
+    if win_fonts and os.path.isdir(win_fonts) and win_fonts != fontsdir:
+        fontsdir = f"{fontsdir}:{win_fonts}" if fontsdir else win_fonts
     if fontsdir and os.path.isdir(fontsdir):
         vf += f":fontsdir='{fontsdir.replace(chr(92), '/').replace(':', chr(92) + ':')}'"
     run_ffmpeg(["-i", video, "-vf", vf,
@@ -823,11 +835,15 @@ def _split_sentences(text):
     return parts or [text]
 
 
-def write_srt(scene_texts, scene_starts, dst, words_per_line=6):
+def write_srt(scene_texts, scene_starts, dst, words_per_line=6, total_duration=None):
     """Khmer-safe SRT: one sentence per caption block, time-sliced within the
     scene's window (word timing on Khmer is unreliable — it has no spaces —
     so sentence, not word, is the smallest unit we sync to), each block
-    manually line-wrapped since libass can't auto-wrap spaceless script."""
+    manually line-wrapped since libass can't auto-wrap spaceless script.
+
+    ``total_duration`` is the real length of the finished cut: the last scene
+    then ends there instead of at a fake "start + 3 s" that can overrun the
+    video (captions visible on a frozen/black tail) or vanish early."""
     def fmt(sec):
         sec = max(0.0, float(sec))
         h = int(sec // 3600)
@@ -838,7 +854,13 @@ def write_srt(scene_texts, scene_starts, dst, words_per_line=6):
     blocks = []
     n = 0
     for i, (txt, start) in enumerate(zip(scene_texts, scene_starts)):
-        end = scene_starts[i + 1] if i + 1 < len(scene_starts) else start + 3.0
+        if i + 1 < len(scene_starts):
+            end = scene_starts[i + 1]
+        elif total_duration:
+            end = float(total_duration)
+        else:
+            end = start + 3.0
+        end = min(end, start + 600.0)
         end = max(end, start + 0.8)
         sentences = _split_sentences(txt)
         span = (end - start) / len(sentences)

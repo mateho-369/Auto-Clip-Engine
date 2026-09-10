@@ -111,6 +111,12 @@ def create_app(data_root=None, enable_demo_seed=False):
             return r
 
     os.makedirs(STATIC_DIR, exist_ok=True)
+    # bundled Khmer fonts for the web UI (same files libass burns with).
+    # Mounted BEFORE /static: Starlette serves mounts in registration order,
+    # so the broader /static would otherwise swallow /static/fonts.
+    _fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "fonts")
+    if os.path.isdir(_fonts_dir):
+        app.mount("/static/fonts", NoCacheStatic(directory=_fonts_dir), name="fonts")
     app.mount("/static", NoCacheStatic(directory=STATIC_DIR), name="static")
     app.include_router(api_mod.router)
 

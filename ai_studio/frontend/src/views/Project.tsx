@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api, Asset, Project, Run, Scene, StageRow, StageSpec, StylePreview } from "../api";
 import { useToast, errText } from "../main";
 import { Badge, Bar, Empty, Panel, StatusBadge, fmtDur, fmtSize, fmtTime, Spinner } from "../ui";
+import { CaptionStudio } from "./CaptionStudio";
 
 interface Live {
   run_id?: string; status?: string; stages?: StageRow[]; overall?: { pct?: number }; events?: any[];
@@ -20,13 +21,15 @@ export function ProjectView({ projectId, onOpen }: { projectId: string; onOpen: 
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [liveMode, setLiveMode] = useState("");
+  const [capStyle, setCapStyle] = useState<Record<string, any> | null>(null);
   const toast = useToast();
   const wsRef = useRef<WebSocket | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const d = await api<{ project: Project; scenes: Scene[]; runs: Run[] }>(`/projects/${projectId}`);
+      const d = await api<{ project: Project; scenes: Scene[]; runs: Run[]; caption_style?: Record<string, any> }>(`/projects/${projectId}`);
       setProj(d.project);
+      if (d.caption_style) setCapStyle(d.caption_style);
       setRun((r) => (r && d.runs?.length && r.id !== d.runs[0].id) ? d.runs[0] : (r || d.runs?.[0] || null));
       const s = await api<{ roles: StageSpec[] }>("/settings");
       setSpecs(s.roles || []);
@@ -144,6 +147,7 @@ export function ProjectView({ projectId, onOpen }: { projectId: string; onOpen: 
       <div className="split wide-right" style={{ gridTemplateColumns: "minmax(0,1fr) 430px" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <PipelineDAG stages={stages} rows={runRows} onStage={(k) => setSelStage(k)} />
+          <CaptionStudio projectId={proj.id} initial={capStyle} onChanged={load} />
           <SceneBoard proj={proj} scenes={sc} rows={runRows} assets={assets} sel={selScene}
             onSel={setSelScene} onChanged={load} act={act} busy={busy} />
           <ScriptPanel proj={proj} onChanged={load} act={act} busy={busy} />
@@ -418,7 +422,6 @@ function Inspector({ proj, scenes, stage, scene, assets, rows, onChanged, act, b
   const stageRows = rows.filter((r) => r.stage === stage && r.scene_idx === scene);
   const row = stageRows[0];
   const a = (kind: string) => assets.find((x) => x.scene_idx === scene && x.kind === kind);
-  const all = assets.find((x) => x.kind === "final");
   const zips = {};
 
   const regen = async () => {
@@ -436,6 +439,11 @@ function Inspector({ proj, scenes, stage, scene, assets, rows, onChanged, act, b
   const voice = a("voice_final") || a("voice");
   const amb = a("ambient");
   const qa = a("qa");
+  // the captioned cut when one exists — never silently play the uncaptioned one
+  const finals = assets.filter((x) => x.kind === "final" || x.kind === "final_uncaptioned");
+  const capFinal = finals.find((x) => x.kind === "final");
+  const all = capFinal || finals[0] || assets.find((x) => x.kind === "video_fit");
+  const srt = assets.find((x) => x.kind === "srt");
   const instProps = (x: Asset | undefined) => x && (
     <details key={x.kind} style={{ marginBottom: 6 }}>
       <summary className="hint">{x.kind} · {x.engine || ""} · {fmtDur(x.duration)}</summary>
@@ -509,13 +517,23 @@ function Inspector({ proj, scenes, stage, scene, assets, rows, onChanged, act, b
         <div className="panel-b">
           {all ? (
             <>
+              {all.kind === "final" && (all.meta?.captions === "burned") &&
+                <div className="badge ok" style={{ marginBottom: 6 }}>
+                  ✓ burned captions · {all.meta?.caption_preset || ""} · {all.meta?.caption_font || ""}
+                </div>}
+              {all.kind === "final" && all.meta?.captions !== "burned" &&
+                <div className="badge warn" style={{ marginBottom: 6 }}>no burned captions</div>}
               <video controls preload="metadata" src={`/api/assets/${all.id}/stream`} />
               <div className="row" style={{ marginTop: 6 }}>
-                <a className="btn tiny primary" href={`/api/assets/${all.id}/download`}>⬇ final mp4</a>
+                <a className="btn tiny primary" href={`/api/assets/${all.id}/download`}>⬇ final mp4{srt ? "" : " (uncaptioned)"}</a>
+                {srt && <a className="btn tiny" href={`/api/assets/${srt.id}/download`}>⬇ .srt</a>}
                 <a className="btn tiny" href={`/api/projects/${proj.id}/download?kind=all`}>project zip</a>
                 <a className="btn tiny" href={`/api/projects/${proj.id}/download?kind=bundle`}>.json</a>
               </div>
-              <div className="hint" style={{ marginTop: 6 }}>{fmtDur(all.duration)} · {fmtSize(all.size_bytes)}</div>
+              <div className="hint" style={{ marginTop: 6 }}>
+                {fmtDur(all.duration)} · {fmtSize(all.size_bytes)}
+                {all.meta?.caption_timing ? ` · timing: ${all.meta.caption_timing}` : ""}
+              </div>
             </>
           ) : <Empty text="no final cut yet" />}
         </div>

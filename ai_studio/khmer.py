@@ -169,7 +169,16 @@ def words(text):
         from khmercut import tokenize  # optional dependency, offline dictionary
         toks = [w for w in tokenize(t) if w.strip()]
         if toks:
-            return toks
+            # line-break safety: a trailing sign (។ ៕ ៖ ៗ ! ? . ,) is part of
+            # the word it follows — it must never start a caption line. Merging
+            # here fixes wrapping AND keeps karaoke highlighting attached.
+            merged: list[str] = []
+            for tok in toks:
+                if merged and len(tok) == 1 and tok in "។៕៖ៗ？！?!.,，":
+                    merged[-1] += tok
+                else:
+                    merged.append(tok)
+            return merged
     except Exception:
         pass
     if " " in t:
@@ -188,38 +197,52 @@ def words(text):
     return words
 
 
-def wrap_words(text, max_clusters=16):
+def wrap_words(text, max_clusters=16, width_fn=None, budget_px=None):
     """Wrap `text` into lines that break BETWEEN words, never inside one.
 
-    Line width is measured in character clusters (the visual unit Khmer
-    actually occupies), but the break points come from `words()` — dictionary
-    word boundaries when khmercut is available. Lone punctuation tokens
-    (។ ៕ ៖ ! ?) are glued to the previous line instead of starting one.
+    Break points come from `words()` — dictionary word boundaries when
+    khmercut is available. Source spaces are PRESERVED: the spaces the author
+    wrote stay in the rendered line, and a line break consumes the space it
+    breaks at instead of deleting it.
+
+    Width is measured with ``width_fn`` (e.g. shaped pixel widths from
+    captions.Shaper) when given, otherwise in character clusters — the visual
+    unit Khmer actually occupies. ``budget_px`` overrides the cluster budget
+    when measuring in pixels.
     """
     t = (text or "").strip()
     if not t:
         return [""]
-    budget = max(1, int(max_clusters))
-    toks = words(t)
-    lines, cur, width = [], [], 0
-    for tok in toks:
-        w = cluster_len(tok)
-        alone_punct = len(tok) == 1 and tok in "។៕៖？！?!.,，"
-        if alone_punct and cur:
-            cur.append(tok)
-            width += w
+    toks: list[tuple[str, bool]] = []
+    for pi, phrase in enumerate(t.split(" ")):
+        if not phrase:
             continue
-        if cur and width + w > budget:
-            lines.append("".join(cur))
-            cur, width = [], 0
-        cur.append(tok)
-        width += w
-        if width >= budget:
-            lines.append("".join(cur))
-            cur, width = [], 0
+        for j, w in enumerate(words(phrase)):
+            toks.append((w, pi > 0 and j == 0))
+    measure = width_fn or (lambda s: cluster_len(s))
+    budget = float(budget_px) if budget_px else max(1, int(max_clusters))
+    space_w = measure(" ") if width_fn else 1.0
+    lines: list[list[tuple[str, bool]]] = []
+    cur: list[tuple[str, bool]] = []
+    width = 0.0
+    for word, had_space in toks:
+        w = measure(word)
+        sep_w = space_w if (had_space and cur) else 0.0
+        lone_punct = len(word) == 1 and word in "។៕៖？！?!.,，—–-/"
+        if lone_punct and cur:
+            cur.append((word, had_space))
+            width += sep_w + w
+            continue
+        if cur and width + sep_w + w > budget:
+            lines.append(cur)
+            cur, width = [], 0.0
+            sep_w = 0.0
+        cur.append((word, had_space and bool(cur)))
+        width += sep_w + w
     if cur:
-        lines.append("".join(cur))
-    return lines or [""]
+        lines.append(cur)
+    out = ["".join(((" " if had and i else "") + w) for i, (w, had) in enumerate(l)) for l in lines]
+    return out or [""]
 
 
 def wrap_clusters(text, max_clusters=16):

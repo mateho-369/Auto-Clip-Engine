@@ -149,3 +149,21 @@ export interface VoiceProfile {
 }
 
 export const EMPTY_PROJECT = {} as Project;
+
+// ---------------------------------------------------------------- captions
+export interface CaptionFont {
+  id: string; label: string; family: string; weights: string[];
+  note: string; license: string; sample_url: string; available: boolean;
+}
+
+export interface CaptionSchema {
+  fonts: CaptionFont[];
+  presets: { id: string; label: string }[];
+  defaults: Record<string, any>;
+  effective: Record<string, any>;
+  modified: string[];
+  ranges: Record<string, [number, number]>;
+  positions: string[]; aligns: string[];
+  ref_height: number;
+  timing_note: string;
+}

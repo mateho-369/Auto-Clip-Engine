@@ -52,20 +52,22 @@ STAGES = [
               blurb="SadTalker: one character image lip-synced to the finished voice "
                     "(only for render_mode=talking_head scenes; other scenes skip)",
               model="SadTalker", outputs=("talking_head",)),
-    StageSpec("video", "4 · Animator (Wan)", "🎞️", role="video", resource="gpu", requires_gpu=True,
+    StageSpec("video", "4 · Animator", "🎞️", role="video", resource="gpu", requires_gpu=True,
               depends=("breakdown",), deferrable=True,
-              blurb="Wan2.1 1.3B (or Wan2.2 5B) at 480p, silent, duration from the estimate. "
+              blurb="Wan2.1 1.3B (or Wan2.2 5B) at 480p via ComfyUI when it is online; "
+                    "otherwise the CPU previz draft renderer (clearly labelled). "
                     "Character scenes use I2V with the matched expression image; "
                     "illustration scenes use Ken Burns on a still.",
-              model="Wan2.1-T2V-1.3B / ComfyUI", outputs=("video",)),
+              model="Wan2.1-T2V-1.3B · fallback: CPU previz", outputs=("video",)),
     StageSpec("video_fit", "4b · Duration match", "⏱️", role="media", resource="cpu",
               depends=("video", "talking_head", "voice_final"), deferrable=True,
               blurb="Trim / freeze so the picture matches the finished voice exactly",
               model="ffmpeg", outputs=("video_fit",)),
     StageSpec("sfx", "5 · SFX Director", "🔊", role="sfx", resource="gpu", requires_gpu=True,
               depends=("video",), deferrable=True,
-              blurb="MMAudio video-to-audio ambience from the mood tag (below-8GB mode)",
-              model="MMAudio small / ComfyUI", outputs=("ambient",)),
+              blurb="MMAudio video-to-audio ambience via ComfyUI when online; "
+                    "otherwise procedural mood ambience (clearly labelled)",
+              model="MMAudio small · fallback: procedural", outputs=("ambient",)),
     StageSpec("qa", "6 · QA Reviewer", "✅", role="qa", resource="llm",
               depends=("voice_final", "video_fit", "sfx"),
               blurb="Length mismatch, silence gaps, clipping, engine honesty + tone review",

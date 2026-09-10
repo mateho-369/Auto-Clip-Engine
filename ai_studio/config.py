@@ -206,11 +206,22 @@ DEFAULTS = {
         "negative_prompt": "",
         "timeout_sec": 900,
     },
+    # Caption typography defaults (ai_studio/captions.py owns the schema).
+    # Global layer: applies to every project; a project may override via
+    # settings.captions. Validated on every write (see captions.validate_style).
+    "captions": {"from_captions_module": True},
     # "" = resolve at runtime: STUDIO_DATA_DIR, else <repo>/data/studio.
     # Kept empty on purpose so a custom --data-dir also moves model/voice lookups.
     "paths": {"data_dir": ""},
     "ui": {"theme": "dark", "items_per_page": 24},
 }
+
+# the real caption defaults (kept in one place: ai_studio/captions.py)
+try:  # pragma: no cover - import guard for partial installs
+    from .captions import DEFAULT_STYLE as _CAPTION_DEFAULTS
+    DEFAULTS["captions"] = copy.deepcopy(_CAPTION_DEFAULTS)
+except Exception:  # captions module unavailable — keep the placeholder
+    DEFAULTS["captions"] = {}
 
 
 # --------------------------------------------------------------- deep merge
@@ -243,6 +254,12 @@ def _coerce(cfg):
     title_style = str(c.get("assembly", {}).get("title_style") or "")
     if title_style not in _ttl_keys:
         c["assembly"]["title_style"] = ""
+    try:
+        from .captions import validate_style as _validate_caption_style
+        cap_valid, _cap_issues = _validate_caption_style(c.get("captions") or {})
+        c["captions"] = cap_valid
+    except Exception:
+        pass
     c["pipeline"]["scene_target_seconds"] = clamp(c["pipeline"].get("scene_target_seconds"), 2.5, 20.0)
     c["pipeline"]["scene_min_seconds"] = min(c["pipeline"]["scene_min_seconds"],
                                              c["pipeline"]["scene_target_seconds"])

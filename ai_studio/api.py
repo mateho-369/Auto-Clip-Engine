@@ -150,12 +150,16 @@ async def api_project(project_id: str):
         raise HTTPException(404, "project not found")
     runs = st.db.list_runs(project_id, limit=40)
     for r in runs:
-        r["summary"] = RunProgress.rollup(st.db.list_stages(r["id"]))
-        r["overall"] = RunProgress.overall(st.db.list_stages(r["id"]))
+        rows = st.db.list_stages(r["id"])
+        r["stages"] = rows                      # full rows: the UI reopens with
+        r["summary"] = RunProgress.rollup(rows)  # the saved state, not "waiting"
+        r["overall"] = RunProgress.overall(rows)
         r["assets_count"] = len(st.db.list_assets(run_id=r["id"], limit=999))
     latest = runs[0] if runs else None
+    from . import captions as cap
     return {"project": proj, "scenes": st.db.list_scenes(project_id), "runs": runs,
             "latest_run_id": (latest or {}).get("id"),
+            "caption_style": cap.effective_style(proj, st.config()),
             "prompts": st.db.list_prompts(project_id=project_id, limit=60),
             "assets": st.db.list_assets(project_id=project_id, limit=400),
             "integrity": _integrity_report(proj, st.db.list_scenes(project_id)),
@@ -232,7 +236,12 @@ async def api_update_project(project_id: str, payload: dict = Body(...)):
                     out[k] = v
             return out
 
-        kw["settings"] = _merge(base, payload["settings"] or {})
+        merged = _merge(base, payload["settings"] or {})
+        if "captions" in merged:
+            from . import captions as cap
+            cap_style, _cap_issues = cap.validate_style(merged.get("captions") or {})
+            merged["captions"] = cap_style
+        kw["settings"] = merged
     if not kw:
         raise HTTPException(400, "nothing to update")
     return {"project": st.db.update_project(project_id, **kw)}
@@ -698,6 +707,118 @@ async def api_prompts(project_id: str = "", run_id: str = "", stage: str = "", l
     st = get_state()
     return {"prompts": st.db.list_prompts(project_id=project_id or None, run_id=run_id or None,
                                          stage=stage or None, limit=min(1000, max(1, limit)))}
+
+
+# ================================================== captions (typography)
+@router.get("/captions/schema")
+async def api_captions_schema(project_id: str = ""):
+    """Everything the Typography & Captions inspector needs: bundled fonts
+    (with weights + licenses), presets, validation ranges, global defaults and
+    the effective style for one project."""
+    st = get_state()
+    proj = st.db.get_project(project_id) if project_id else None
+    if project_id and not proj:
+        raise HTTPException(404, "project not found")
+    from . import captions as cap
+    cfg = st.config()
+    eff = cap.effective_style(proj or {}, cfg)
+    fonts = []
+    for fid, spec in cap.FONTS.items():
+        fonts.append({
+            "id": fid, "label": spec["label"], "family": spec["family"],
+            "weights": sorted(spec["weights"].keys()), "note": spec.get("note", ""),
+            "license": spec.get("license", ""),
+            "sample_url": f"/api/captions/font-sample?font={fid}",
+            "available": all(os.path.exists(os.path.join(cap.fonts_dir(), f))
+                             for f in spec["weights"].values()),
+        })
+    return {
+        "fonts": fonts,
+        "presets": [{"id": k, "label": v.get("label", k.title())} for k, v in
+                    cap.PRESETS.items()],
+        "defaults": cap.DEFAULT_STYLE,
+        "effective": eff,
+        "modified": cap.modified_fields(eff),
+        "ranges": cap.RANGES,
+        "positions": list(cap.POSITIONS), "aligns": list(cap.ALIGNS),
+        "ref_height": cap.REF_H,
+        "timing_note": ("karaoke word timing is a proportional estimate — sherpa-onnx "
+                        "provides no word-level timestamps; sentence captions are the "
+                        "frame-accurate option"),
+    }
+
+
+@router.get("/captions/font-sample")
+async def api_captions_font_sample(font: str = "noto_sans_khmer"):
+    """A PNG of real Khmer sample text in ONE bundled font (font picker tiles)."""
+    from . import captions as cap
+    if font not in cap.FONTS:
+        raise HTTPException(400, f"unknown font '{font}'")
+    text = "ជីវិតមនុស្ស មិនមែនជាការប្រណាំងទេ។"
+    style, _ = cap.validate_style({"font": font, "weight": "regular",
+                                   "preset": "custom", "size_pct": 5.0,
+                                   "panel": {"enabled": False}})
+    try:
+        p = cap.render_preview(style, text, 480, 240, bg="light",
+                               cache_key=f"fontsample_{font}", work_dir=_preview_work_dir())
+    except Exception as e:
+        raise HTTPException(500, f"font sample render failed: {str(e)[:200]}")
+    return FileResponse(p, media_type="image/png")
+
+
+@router.post("/captions/preview")
+async def api_captions_preview(payload: dict = Body(default={})):
+    """Render ONE frame with the exporter's real burn path (ASS + libass) for
+    the requested style/text/size/background. Debounce + stale-response
+    protection happen client-side; identical requests are cached here."""
+    from . import captions as cap
+    st = get_state()
+    project_id = str(payload.get("project_id") or "")
+    proj = st.db.get_project(project_id) if project_id else None
+    if project_id and not proj:
+        raise HTTPException(404, "project not found")
+    raw_style = payload.get("style") or {}
+    # no project context → start from the GLOBAL defaults, not bare DEFAULTS,
+    # so the preview matches what this machine would actually render
+    if proj is None:
+        base = cap.effective_style({}, st.config())
+        raw_style = {**base, **raw_style, "preset": raw_style.get("preset", base.get("preset"))}
+    style, issues = cap.validate_style(raw_style)
+    text = khmer.clip_clusters(khmer.strip_emoji_and_marks(str(payload.get("text") or
+                                  "យើងម្នាក់ៗ មានផ្លូវដើររៀងៗខ្លួន។")), 220)
+    w = int(payload.get("width") or 480)
+    h = int(payload.get("height") or 854)
+    # cap preview workload: the two real formats plus half-size, nothing bigger
+    if (w, h) not in ((480, 854), (854, 480), (240, 427), (427, 240)):
+        w, h = 480, 854
+    bg = str(payload.get("background") or "dark")
+    if bg not in ("dark", "light", "busy", "videoish"):
+        bg = "dark"
+    try:
+        png = cap.render_preview(style, text, w, h, bg=bg, work_dir=_preview_work_dir())
+    except Exception as e:
+        raise HTTPException(500, f"caption preview failed: {str(e)[:240]}")
+    return {"url": f"/api/captions/preview-file?k={os.path.basename(png)}",
+            "style": style, "issues": issues,
+            "modified": cap.modified_fields(style)}
+
+
+@router.get("/captions/preview-file")
+async def api_captions_preview_file(k: str = ""):
+    import re as _re
+    if not _re.fullmatch(r"pv_[0-9a-f]+\.png", k or ""):
+        raise HTTPException(400, "bad preview key")
+    p = os.path.join(_preview_work_dir(), k)
+    if not os.path.exists(p):
+        raise HTTPException(404, "preview expired — request it again")
+    return FileResponse(p, media_type="image/png")
+
+
+def _preview_work_dir() -> str:
+    st = get_state()
+    d = os.path.join(st.data_root, "caption_previews")
+    os.makedirs(d, exist_ok=True)
+    return d
 
 
 # ==================================================================== settings

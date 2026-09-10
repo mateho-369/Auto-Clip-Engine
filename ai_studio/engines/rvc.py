@@ -283,7 +283,7 @@ def _bypass(in_wav, out_wav, cfg, profile, attempts):
     formant = float(r.get("formant_shift") or 0)
     ensure_dir(os.path.dirname(out_wav) or ".")
     reason = ("; ".join(attempts) if attempts else
-              "no RVC back-end available — using the MMS Khmer voice directly")
+              "no RVC back-end available — using the Stage-3a voice directly (timbre unchanged)")
     if abs(semis) < 0.05 and abs(formant) < 0.01:
         shutil.copyfile(in_wav, out_wav)
         return {"ok": True, "engine": "bypass", "converted": False, "reason": reason,
