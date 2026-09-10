@@ -404,9 +404,16 @@ function Voices() {
 // ---------------------------------------------------------------- Settings
 function Settings({ status }: { status: StatusPayload | null }) {
   const [s, setS] = useState<any>(null);
+  // presets come from the caption module itself, so Admin and the project
+  // inspector can never offer different looks
+  const [presets, setPresets] = useState<any[]>([]);
   const toast = useToast();
   const load = useCallback(async () => {
-    try { setS(await api("/settings")); } catch (e) { toast(errText(e), "err"); }
+    try {
+      setS(await api("/settings"));
+      const c = await api<{ presets: any[] }>("/caption-style");
+      setPresets(c.presets || []);
+    } catch (e) { toast(errText(e), "err"); }
   }, [toast]);
   useEffect(() => { load(); }, [load]);
   if (!s) return <div className="pad"><Spinner /></div>;
@@ -451,10 +458,34 @@ function Settings({ status }: { status: StatusPayload | null }) {
               <input type="checkbox" checked={!!cfg.assembly?.burn_captions}
                 onChange={(e) => save({ assembly: { ...cfg.assembly, burn_captions: e.target.checked } })} style={{ width: "auto" }} />
             </label>
-            <label className="fld"><span>subtitle style</span>
-              <select value={cfg.assembly?.subtitle_style || "clean"} onChange={(e) => save({ assembly: { ...cfg.assembly, subtitle_style: e.target.value } })}>
-                {Object.entries(s.subtitle_styles || {}).map(([k, v]: any) => <option key={k} value={k}>{v.label}</option>)}
+            <label className="fld"><span>caption preset (studio default)</span>
+              <select value={cfg.caption_style?.preset || "custom"}
+                onChange={(e) => {
+                  const p = presets.find((x) => x.key === e.target.value);
+                  if (p) save({ caption_style: p.style });
+                }}>
+                {cfg.caption_style?.preset === "custom" && <option value="custom">Custom (edited)</option>}
+                {presets.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
               </select>
+            </label>
+            <div className="hint">
+              {cfg.caption_style?.font} · {Math.round(cfg.caption_style?.font_size_px || 0)}px ·
+              &nbsp;{s.caption_capabilities?.libass
+                ? `libass ok · shaping ${s.caption_capabilities?.shaping}`
+                : "ffmpeg has no libass — captions cannot be burned"}
+              {!!(s.caption_capabilities?.problems || []).length &&
+                <span className="warnline"> {s.caption_capabilities.problems.join("; ")}</span>}
+            </div>
+            <label className="fld"><span>karaoke word highlight</span>
+              <input type="checkbox" checked={!!cfg.karaoke?.enabled}
+                onChange={(e) => save({ karaoke: { ...cfg.karaoke, enabled: e.target.checked } })} style={{ width: "auto" }} />
+            </label>
+            <div className="hint">
+              word timings are proportional estimates inside each cue — not forced alignment
+            </div>
+            <label className="fld"><span>emit .srt beside the final cut</span>
+              <input type="checkbox" checked={cfg.assembly?.emit_srt !== false}
+                onChange={(e) => save({ assembly: { ...cfg.assembly, emit_srt: e.target.checked } })} style={{ width: "auto" }} />
             </label>
             <label className="fld"><span>title style (empty = none)</span>
               <select value={cfg.assembly?.title_style || ""} onChange={(e) => save({ assembly: { ...cfg.assembly, title_style: e.target.value } })}>

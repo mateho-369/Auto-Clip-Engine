@@ -265,7 +265,7 @@ class Database:
                    "content_type", "character_id", "settings_json", "parent_id", "last_run_id"}
         sets, params = [], []
         for k, v in kw.items():
-            if k == "settings":
+            if k in ("settings", "settings_json") and not isinstance(v, str):
                 k, v = "settings_json", jdump(v)
             elif k == "script_locked":
                 v = 1 if v else 0

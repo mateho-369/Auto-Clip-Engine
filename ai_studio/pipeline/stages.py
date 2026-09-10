@@ -294,6 +294,11 @@ async def stage_voice_base(ctx, idx):
     from ..engines import tts
 
     engine = (ctx.plan.get("tts") or {}).get("engine", "placeholder")
+    # remember what actually spoke, so the manifest and the timbre stage can be honest
+    try:
+        ctx.cfg.setdefault("tts", {})["_resolved_engine"] = engine
+    except Exception:
+        pass
     out = ctx.asset_path("voice", idx, ".wav")
     if os.path.exists(out) and "voice_base" not in ctx.force_stages:
         os.remove(out)
@@ -341,8 +346,11 @@ async def stage_voice_final(ctx, idx):
                             "duration": media_duration(out), "meta": {"converted": False,
                                                                       "reason": "rvc disabled"}}],
                 "scene_update": {"audio_duration": media_duration(out)}}
+    source_engine = str((base.get("meta") or {}).get("engine") or "") or \
+        str((ctx.plan.get("tts") or {}).get("engine") or "")
     res = await asyncio.to_thread(rvc.convert, base["path"], out, ctx.cfg, profile,
-                                  ctx.progress_cb("voice_final", idx, 5, 95, "RVC · "))
+                                  ctx.progress_cb("voice_final", idx, 5, 95, "RVC · "),
+                                  source_engine)
     if not res.get("ok"):
         return {"ok": False, "error": f"timbre conversion failed: {res.get('reason')}",
                 "engine": plan_rvc}
@@ -350,6 +358,8 @@ async def stage_voice_final(ctx, idx):
     facts = ctx.voice_facts(out)
     meta = {"converted": bool(res.get("converted")), "engine": res.get("engine"),
             "profile": (profile or {}).get("name", ""), "reason": res.get("reason", ""),
+            "source_engine": source_engine,
+            "source_is_real_speech": bool((base.get("meta") or {}).get("real_speech")),
             "pitch": int(ctx.cfg["rvc"].get("pitch") or 0), **facts}
     msg = (f"voice in '{(profile or {}).get('name') or 'base'}' timbre · {facts['duration']:.2f}s"
            if res.get("converted") else

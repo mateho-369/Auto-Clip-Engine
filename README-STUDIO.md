@@ -504,6 +504,11 @@ UI must end with `npm run build` before delivery,* because FastAPI serves the bu
   duration + voice + style notes → Create.
 * **Style Gallery** — real pre-rendered 3-second samples (`/api/style-previews`,
   cached on disk) for every subtitle style *and* title style — never blind dropdown names.
+* **Typography & Captions inspector** — the caption layer has its own panel: preset grid
+  (each cell is a **real render**), font + weight, size slider, colours, outline, shadow,
+  background panel, position/margins/line spacing, karaoke toggle, burn on/off, and a live
+  preview that is the **export's own renderer** (`POST /api/caption-preview`) — plus
+  *“render captions now”*, which re-burns the existing cut without re-running the pipeline.
 * **Director script editor** — live preview under the textarea: `[[silent: …]]` spans
   shown greyed + struck-through (displayed, never spoken), plus a
   **“mark selection as not spoken”** helper that wraps your selection in the markup.
@@ -521,20 +526,31 @@ UI must end with `npm run build` before delivery,* because FastAPI serves the bu
   click-to-open, and the exact `--check` fix command per engine shown verbatim.
 * **History** — projects + runs tables (mode, content type, status, poster, duplicate).
 
-### 6c · Subtitles & title cards
+### 6c · Captions & typography (Khmer-first)
 
-Per-project `assembly.burn_captions` (on/off). Styles (each with a cached preview):
+Captions are rendered by one renderer (`ai_studio/captions.py`) with **bundled OFL fonts**,
+cluster-safe Khmer wrapping, and a style dict that the API validates. Preview and export
+share it, so what you see in the inspector is what lands in the file. Full details:
+**`docs/KHMER-CAPTIONS.md`**.
 
-| Subtitle | Look |
+| Preset | Look |
 |---|---|
-| `clean` | neutral white, dark soft box, bottom |
-| `bold_yellow` | bold yellow, stronger box |
-| `minimal_top` | small, top of frame |
-| `karaoke` | word-by-word highlight via ASS `\k` timing — timings come from `khmer.syllable_estimate`; **approximation by design** (ASR-based word timing is future work) |
+| `clean` | white Noto Sans Khmer, restrained outline + soft shadow, bottom |
+| `cinema` | warm ivory Noto Serif Khmer, generous spacing, quiet |
+| `bold-social` | high-contrast yellow Kantumruy Pro Bold, thick outline, centred |
+| `soft-card` | white on a dark translucent rounded panel (mobile-safe) |
+| `editorial` | calm serif, wide margins — quotes and essays |
 
-Title cards are optional: `assembly.title_style` is **nullable** on the project; presets
-`centered_fade` / `bottom_left_minimal` / `bold_pop`. Same preview gallery. Every run's
-manifest records `pacing.title_style`, `pacing.subtitle_style` and `pacing.line_gap_sec`.
+Per-project `assembly.burn_captions` (on/off) and `assembly.emit_srt`; the studio-wide
+`caption_style` can be overridden per project (nothing is rewritten for old projects).
+Karaoke (`karaoke.enabled`) highlights words with ASS `\k` tags — the timings are
+**proportional estimates inside the cue, explicitly not forced alignment**, and every
+surface says so. Uncovered glyphs (Battambang has no `–`/`—`) are *reported*, never hidden.
+
+Title cards are optional and unchanged: `assembly.title_style` is **nullable** on the
+project; presets `centered_fade` / `bottom_left_minimal` / `bold_pop`. Every run's manifest
+records `pacing.title_style`, `pacing.line_gap_sec`, and a full `captions` block (style,
+font file, coverage/glyph warnings, karaoke disclosure).
 
 ---
 
@@ -566,6 +582,7 @@ Nothing else is written outside `data/studio/` — media lives in
 | runs | `POST /api/projects/{id}/runs` · `GET /api/runs` · `GET /api/runs/{id}` · `GET /api/runs/{id}/status?since=N` · `POST /api/runs/{id}/pause|resume|cancel|continue` · `POST /api/runs/{id}/stages/{stage}/regenerate` · `GET /api/runs/{id}/scenes/{idx}/bundle` · `WS /api/runs/{id}/events` · `SSE /api/runs/{id}/stream` |
 | media | `GET /api/assets?project_id&kind` · `GET /api/assets/{id}/stream|/download|/waveform` · `GET /api/tmpfile?name=` · `/files/<relpath>` (static) |
 | styles | `GET /api/style-previews` (cached per subtitle/title style; honest `error` field when a render fails) |
+| captions | `GET|POST /api/caption-style` · `POST /api/caption-style/reset` · `GET /api/caption-style/previews` · `GET|PUT|POST /api/projects/{id}/caption-style` · `POST /api/caption/validate` · `POST /api/caption-preview` (real PNG + `X-Caption-*` headers) · `POST /api/projects/{id}/render-captions` · `GET /api/fonts/{font_id}/{filename}` · `GET /api/assets/{id}/download?cap=1` (captioned cut) |
 | memory | `GET /api/prompts?project_id&run_id&stage` · `GET /api/memory/search?q=` · `GET /api/jobs` |
 | voices | `GET|POST /api/voices` · `POST /api/voices/import-discovered` · `DELETE /api/voices/{id}` · `POST /api/voices/{id}/select|preview|train` · `GET /api/training/{job_id}` |
 | preview | `POST /api/preview/previz` (render a 2 s mood draft without creating a project) |
@@ -578,9 +595,20 @@ tests in `tests/test_studio_pipeline.py`.
 ## 9 · Tests
 
 ```bash
-PYTHONPATH=. pytest tests/test_studio_text.py tests/test_studio_pipeline.py -q   # 66 passed
+PYTHONPATH=. pytest tests/test_studio_captions.py -q                             # 51 passed
+PYTHONPATH=. pytest tests/test_studio_text.py tests/test_studio_pipeline.py -q   # 67 passed
 python -m pytest -q    # via `python -m` from the repo root: 143 passed (incl. legacy ai_creator suite)
 ```
+
+`tests/test_studio_captions.py` is the caption regression suite: text preserved exactly
+through wrapping, no line starts/ends on a coeng, every bundled font really has the glyphs
+for the test corpus (per-character `.notdef` audit), font rotation per style, unknown font
+refused, bounds/overshoot reported, ASS font naming + colour conversion, last cue ending at
+the real audio end, SRT round-trip, preview/burn agreement, style validation and partial
+patch semantics, the whole caption HTTP surface (including `../` font traversal refusals),
+soft-fail removal for a requested burn, and an **end-to-end export** that diffs a frame of
+the captioned file against the uncaptioned master and requires glyph-shaped ink inside the
+caption band.
 
 No GPU and no network needed: Khmer text handling (cluster-safe segmentation, danda,
 syllable→duration, chunking, silent-markup display vs speech), style-guardrail invariants,
@@ -656,7 +684,16 @@ the output JSON/audio/asset files:
 * **MMAudio node names** are the one part unverified on this repo's side (no GPU here) — the
   bring-your-own-workflow path is deliberate, not a dodge.
 * **Karaoke timing is approximate.** Word highlights use syllable estimates, not ASR
-  alignment; exact phoneme timing is future work, and the style label says so.
+  alignment; exact phoneme timing is future work, and every surface (API metadata, UI
+  tooltip) says "proportional estimate — not forced alignment".
+* **Caption fonts are the four bundled Khmer families** (Noto Sans/Serif Khmer, Kantumruy
+  Pro, Battambang). A non-bundled name is refused instead of substituted — that refusal is
+  the fix for the tofu-caption bug. Battambang genuinely lacks `–`/`—`; libass substitutes
+  another face for those glyphs and the gap is reported as a coverage warning.
+* **Real Khmer speech needs either a local model or `tts.allow_online`.** The edge-tts
+  engine is opt-in (it sends the script text to Microsoft) and is never enabled by default;
+  otherwise narration stays the clearly-flagged placeholder tone and the RVC stage says
+  which engine actually produced the audio.
 * **Two characters in one frame is not automatic yet** — see §3c (needs 12 GB+; alternation
   works today).
 * **QA is a language model reading facts about the media**, not a pixel-differ. It catches
@@ -675,4 +712,7 @@ monetising. `sailor2`: Apache-2.0. Wan 2.1/2.2: Apache-2.0. FLUX.2 klein: see
 Black Forest Labs' licence (non-commercial for the open weights — verify before
 monetising). MMAudio: check the repo's licence (non-commercial-leaning). SadTalker:
 Apache-2.0. RVC: MIT, but *your* voice model's rights follow your recordings.
-Everything in this folder is MIT with the rest of the repo.
+Bundled caption fonts (`ai_studio/fonts/`): **SIL Open Font License 1.1** — Noto Sans
+Khmer, Noto Serif Khmer, Kantumruy Pro and Battambang, each with its `OFL.txt`
+(`ai_studio/fonts/LICENSE-OFL-*.txt`). Everything else in this folder is MIT with the rest
+of the repo.

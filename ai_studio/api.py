@@ -23,7 +23,8 @@ from fastapi import (APIRouter, Body, Depends, File, Form, HTTPException, Query,
                      UploadFile, WebSocket, WebSocketDisconnect)
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
-from . import __version__, config as cfg_mod, content as content_mod, khmer, media, style as style_mod
+from . import (__version__, caption_style as caption_style_mod, captions as captions_mod,
+               config as cfg_mod, content as content_mod, khmer, media, style as style_mod)
 from . import vram as vram_mod
 from .db import Database
 from .events import RunProgress
@@ -154,8 +155,22 @@ async def api_project(project_id: str):
         r["overall"] = RunProgress.overall(st.db.list_stages(r["id"]))
         r["assets_count"] = len(st.db.list_assets(run_id=r["id"], limit=999))
     latest = runs[0] if runs else None
+    cap_asset = _latest_caption_asset(project_id)
     return {"project": proj, "scenes": st.db.list_scenes(project_id), "runs": runs,
             "latest_run_id": (latest or {}).get("id"),
+            "captions": {
+                "asset": ({"id": cap_asset["id"], "path": cap_asset["path"],
+                           "duration": cap_asset.get("duration"),
+                           "download": f"/api/assets/{cap_asset['id']}/download?cap=1",
+                           "stream": f"/api/assets/{cap_asset['id']}/stream"}
+                          if cap_asset else None),
+                "effective_style": caption_style_mod.merge_styles(
+                    st.config().get("caption_style") or {},
+                    (proj.get("settings") or {}).get("caption_style")
+                    if isinstance(proj.get("settings"), dict) else None),
+                "has_project_override": bool(isinstance(proj.get("settings"), dict)
+                                             and proj["settings"].get("caption_style")),
+            },
             "prompts": st.db.list_prompts(project_id=project_id, limit=60),
             "assets": st.db.list_assets(project_id=project_id, limit=400),
             "integrity": _integrity_report(proj, st.db.list_scenes(project_id)),
@@ -169,12 +184,22 @@ def _integrity_report(proj, scenes):
                 "detail": "Mode B — the Controller wrote this script, edits are allowed"}
     joined = khmer.join_sentences([s.get("text", "") for s in scenes])
     ok = khmer.equal_text(joined, proj.get("script") or "") if scenes else None
+    return _integrity_body(proj, scenes, joined, ok)
+
+
+def _integrity_body(proj, scenes, joined, ok):
+    st = STATE.get("app")
+    cap = None
+    if st:
+        a = _latest_caption_asset(proj["id"])
+        cap = {"burned": bool(a), "asset_id": (a or {}).get("id")}
     return {"applies": True, "ok": ok,
             "detail": ("scene text rejoins the Director's script exactly" if ok else
                        ("not segmented yet" if ok is None else
                         "⚠ wording differs from the pasted script")),
             "script_chars": khmer.char_len(proj.get("script") or ""),
-            "scene_chars": khmer.char_len(joined)}
+            "scene_chars": khmer.char_len(joined),
+            "captions": cap}
 
 
 def _project_disk(project_id):
@@ -642,10 +667,32 @@ async def api_asset_stream(asset_id: str, request: Request = None):
 
 
 @router.get("/assets/{asset_id}/download")
-async def api_asset_download(asset_id: str):
+async def api_asset_download(asset_id: str, cap: int = Query(1)):
+    """Download an asset. ``cap=1`` also prefers the *captioned* cut of a project.
+
+    The old Final-cut panel linked straight at the asset row it found first, so a
+    finished run could download the uncaptioned MP4 even when a captioned one
+    existed. This endpoint resolves that for the client: ask for the project's
+    final cut and you get the captioned render when there is one.
+    """
     row = _asset_or_404(asset_id)
+    if cap and row.get("kind") == "final":
+        alt = _latest_caption_asset(row.get("project_id") or "")
+        if alt:
+            row = alt
     return FileResponse(row["path"], media_type=row.get("mime") or "application/octet-stream",
                         filename=os.path.basename(row["path"]))
+
+
+def _latest_caption_asset(project_id):
+    if not project_id:
+        return None
+    try:
+        st = get_state()
+        a = st.db.latest_asset(project_id, "final_captions")
+        return a if a and a.get("path") and os.path.exists(a["path"]) else None
+    except Exception:
+        return None
 
 
 def _stream_with_range(path, mime):
@@ -699,7 +746,9 @@ async def api_settings():
             "placeholders": __import__("ai_studio.workflows", fromlist=["KNOWN_PLACEHOLDERS"])
             .KNOWN_PLACEHOLDERS,
             "pace_presets": cfg_mod.PACE_PRESETS,
-            "subtitle_styles": media.SUBTITLE_STYLES, "title_styles": media.TITLE_STYLES,
+            "subtitle_styles": media.SUBTITLE_STYLES_payload(), "title_styles": media.TITLE_STYLES,
+            "caption_style": cfg.get("caption_style"),
+            "caption_capabilities": captions_mod.capabilities(cfg, refresh=True),
             "content_types": content_mod.content_type_payload(),
             "vram": {"limit_mb": cfg["vram"]["limit_mb"], "detected": plan.get("hardware")}}
 
@@ -707,6 +756,20 @@ async def api_settings():
 @router.post("/settings")
 async def api_settings_save(payload: dict = Body(...)):
     st = get_state()
+    if isinstance(payload.get("caption_style"), dict):
+        try:
+            payload = {**payload,
+                       "caption_style": caption_style_mod.normalize_style(payload["caption_style"])}
+        except caption_style_mod.CaptionStyleError as e:
+            raise HTTPException(400, str(e))
+    if isinstance(payload.get("karaoke"), dict):
+        k = payload["karaoke"]
+        try:
+            payload = {**payload, "karaoke": {
+                "enabled": bool(k.get("enabled", False)),
+                "color": caption_style_mod.parse_color(k.get("color") or "#FFD84D", "karaoke.color")}}
+        except caption_style_mod.CaptionStyleError as e:
+            raise HTTPException(400, str(e))
     cur = st.config()
     merged = cfg_mod.normalize_config(_merge_settings(cur, payload))
     path = cfg_mod.save(merged, st.settings_path)
@@ -1288,6 +1351,471 @@ async def api_ollama_models():
                 "online": False, "error": str(e)[:160]}
 
 
+# ======================================================== typography & captions
+def _caption_bootstrap(st):
+    cfg = st.config()
+    caps = captions_mod.capabilities(cfg, refresh=True)
+    return {
+        "fonts": caption_style_mod.font_list(),
+        "presets": caption_style_mod.preset_payload(),
+        "palettes": captions_mod.palettes(),
+        "defaults": caption_style_mod.DEFAULT_STYLE,
+        "global_style": cfg.get("caption_style"),
+        "karaoke": cfg.get("karaoke") or {"enabled": False, "color": "#FFD84D"},
+        "assembly": {k: (cfg.get("assembly") or {}).get(k) for k in
+                     ("burn_captions", "emit_srt", "subtitle_style", "caption_seconds_per_cue")},
+        "capabilities": caps,
+        "reference": {"height": captions_mod.REFERENCE_HEIGHT,
+                      "width": captions_mod.REFERENCE_WIDTH},
+        "precedence": ["built-in default", "studio settings", "project override"],
+    }
+
+
+@router.get("/caption-style")
+async def api_caption_style():
+    """Everything the Typography &amp; Captions inspector needs, plus what works here."""
+    return await asyncio.to_thread(_caption_bootstrap, get_state())
+
+
+@router.post("/caption-style")
+async def api_caption_style_save(payload: dict = Body(default={})):
+    """Save the studio-wide caption style (validated on the server, not in the browser)."""
+    st = get_state()
+    style_in = payload.get("style", payload)
+    if not isinstance(style_in, dict):
+        raise HTTPException(400, "style must be an object")
+    try:
+        style = caption_style_mod.normalize_style(style_in)
+    except caption_style_mod.CaptionStyleError as e:
+        raise HTTPException(400, str(e))
+    cfg = st.config()
+    cfg["caption_style"] = style
+    cfg.setdefault("assembly", {})["caption_style"] = style
+    if payload.get("burn_captions") is not None:
+        cfg["assembly"]["burn_captions"] = bool(payload["burn_captions"])
+    if payload.get("emit_srt") is not None:
+        cfg["assembly"]["emit_srt"] = bool(payload["emit_srt"])
+    if isinstance(payload.get("karaoke"), dict):
+        try:
+            cfg["karaoke"] = {"enabled": bool(payload["karaoke"].get("enabled", False)),
+                              "color": caption_style_mod.parse_color(
+                                  payload["karaoke"].get("color") or "#FFD84D", "karaoke.color")}
+        except caption_style_mod.CaptionStyleError as e:
+            raise HTTPException(400, str(e))
+    path = cfg_mod.save(cfg_mod.normalize_config(cfg), st.settings_path)
+    st.invalidate()
+    return {"ok": True, "path": path, "style": st.config().get("caption_style"),
+            "warnings": captions_mod.coverage_warnings([{"text": _caption_sample_text()}], style),
+            "note": "saved as the studio default. A project can override it."}
+
+
+def _caption_sample_text():
+    return "ជីវិតមនុស្ស មិនមែនជាការប្រណាំងទេ។"
+
+
+@router.post("/caption-style/reset")
+async def api_caption_style_reset(payload: dict = Body(default={})):
+    st = get_state()
+    preset = payload.get("preset") or "clean"
+    try:
+        style = caption_style_mod.preset_style(preset)
+    except caption_style_mod.CaptionStyleError as e:
+        raise HTTPException(400, str(e))
+    cfg = st.config()
+    cfg["caption_style"] = style
+    cfg.setdefault("assembly", {})["caption_style"] = style
+    cfg_mod.save(cfg_mod.normalize_config(cfg), st.settings_path)
+    st.invalidate()
+    return {"ok": True, "style": style}
+
+
+@router.get("/projects/{project_id}/caption-style")
+async def api_project_caption_style(project_id: str):
+    st = get_state()
+    proj = st.db.get_project(project_id)
+    if not proj:
+        raise HTTPException(404, "project not found")
+    return _project_caption_payload(st, proj)
+
+
+def _caption_style_for_request(style_in, global_style, project_style=None):
+    """Resolve a request-level caption style against the effective style.
+
+    ``style_in`` is a *patch* (see ``caption_style.normalize_patch``), so a single
+    field changes a single field — but naming a preset restarts from that preset,
+    otherwise ``{"preset": "bold-social"}`` would relabel a Clean style as Bold
+    Social: exactly the kind of silent preview/export disagreement this renderer
+    rewrite exists to prevent.
+    """
+    base = caption_style_mod.merge_styles(global_style or {}, project_style)
+    patch = caption_style_mod.normalize_patch(style_in, base, strict=True)
+    if isinstance(style_in, dict) and style_in.get("preset") in caption_style_mod.PRESET_KEYS:
+        base = caption_style_mod.preset_style(style_in["preset"])
+        patch = caption_style_mod.normalize_patch(style_in, base, strict=True)
+    return caption_style_mod.normalize_style({**base, **patch}, base=base, strict=True)
+
+
+def _project_caption_payload(st, proj):
+    cfg = st.config()
+    settings = proj.get("settings") if isinstance(proj.get("settings"), dict) else {}
+    project_style = settings.get("caption_style")
+    effective = caption_style_mod.merge_styles(cfg.get("caption_style") or {},
+                                               project_style)
+    caps = captions_mod.capabilities(cfg)
+    return {
+        "project_id": proj["id"],
+        "global_style": cfg.get("caption_style"),
+        "project_style": caption_style_mod.normalize_style(project_style, strict=False)
+        if project_style else None,
+        "effective_style": effective,
+        "is_default": not project_style,
+        "karaoke": (cfg.get("karaoke") or {}) | (settings.get("karaoke") or {}),
+        "fonts": caption_style_mod.font_list(),
+        "presets": caption_style_mod.preset_payload(),
+        "palettes": captions_mod.palettes(),
+        "precedence": ["built-in default", "studio settings", "project override"],
+        "changed_fields": caption_style_mod.diff_from_preset(effective),
+        "capabilities": caps,
+        "reference": {"height": captions_mod.REFERENCE_HEIGHT,
+                      "width": captions_mod.REFERENCE_WIDTH},
+    }
+
+
+@router.put("/projects/{project_id}/caption-style")
+@router.post("/projects/{project_id}/caption-style")
+async def api_project_caption_style_save(project_id: str, payload: dict = Body(default={})):
+    """Save (or clear) the per-project caption override. Older projects are untouched."""
+    st = get_state()
+    proj = st.db.get_project(project_id)
+    if not proj:
+        raise HTTPException(404, "project not found")
+    project_style = None
+    if not payload.get("clear"):
+        style_in = payload.get("style", payload)
+        if not isinstance(style_in, dict):
+            raise HTTPException(400, "style must be an object")
+        # Layer the request over what the user is looking at (global style or the
+        # current project override) so a partial patch changes one field instead
+        # of resetting the rest to built-in defaults. Naming a preset restarts
+        # from that preset, which is what "apply Clean" must mean.
+        try:
+            project_style = _caption_style_for_request(
+                style_in, st.config().get("caption_style"),
+                (proj.get("settings") or {}).get("caption_style"))
+        except caption_style_mod.CaptionStyleError as e:
+            raise HTTPException(400, str(e))
+    settings = dict(proj.get("settings") or {})
+    if project_style is None:
+        settings.pop("caption_style", None)
+    else:
+        settings["caption_style"] = project_style
+    if payload.get("burn_captions") is not None:
+        settings["burn_captions"] = bool(payload["burn_captions"])
+    st.db.update_project(project_id, settings=settings)
+    proj = st.db.get_project(project_id)
+    return {"ok": True, **_project_caption_payload(st, proj)}
+
+
+@router.get("/fonts/{font_id}/{filename}")
+async def api_font_file(font_id: str, filename: str):
+    """Serve a bundled font file (used by the UI's @font-face + font samples).
+
+    Only the files declared for a bundled family are reachable — the route never
+    accepts a path, so there is no traversal surface, and caption rendering never
+    depends on a font outside the repository.
+    """
+    try:
+        path = caption_style_mod.safe_font_path(font_id, filename)
+    except caption_style_mod.CaptionStyleError as e:
+        raise HTTPException(404, str(e))
+    return FileResponse(path, media_type="font/ttf",
+                        headers={"Cache-Control": "public, max-age=604800, immutable"})
+
+
+@router.post("/caption/validate")
+async def api_caption_validate(payload: dict = Body(default={})):
+    """Script-level checks: unbalanced [[silent: …]], font coverage, fit problems."""
+    st = get_state()
+    text = str(payload.get("text") or "")
+    style = payload.get("style")
+    try:
+        style_n = caption_style_mod.normalize_style(style) if isinstance(style, dict) else None
+    except caption_style_mod.CaptionStyleError as e:
+        raise HTTPException(400, str(e))
+    return await asyncio.to_thread(khmer.validate_script, text, style_n or
+                                   st.config().get("caption_style"),
+                                   int(payload.get("width") or 1080),
+                                   int(payload.get("height") or 1920))
+
+
+_CAPTION_PREVIEW_CACHE = {}
+
+
+@router.post("/caption-preview")
+async def api_caption_preview(payload: dict = Body(default={})):
+    """Render the *actual* captions with the exporter's renderer (PNG, full size).
+
+    Body: ``{text | texts[], style?, project_id?, scene_idx?, width?, height?,
+    at_sec?, backdrop?}``. With a project and an already-rendered cut, the
+    preview is composited onto a real frame of that cut so contrast is real. The
+    response always carries the exact style, font report and warnings, so the UI
+    can never show a preview that silently differs from the export.
+    """
+    st = get_state()
+    cfg = st.config()
+    text = str(payload.get("text") or "").strip()
+    texts = payload.get("texts") if isinstance(payload.get("texts"), list) else None
+    if not text and not texts:
+        text = _caption_sample_text()
+    width = int(payload.get("width") or (cfg.get("video", {}) or {}).get("width") or 1080)
+    height = int(payload.get("height") or (cfg.get("video", {}) or {}).get("height") or 1920)
+    if not (120 <= width <= 4096 and 120 <= height <= 4096):
+        raise HTTPException(400, "width/height must be between 120 and 4096")
+
+    proj = None
+    if payload.get("project_id"):
+        proj = st.db.get_project(str(payload["project_id"]))
+        if not proj:
+            raise HTTPException(404, "project not found")
+    settings = proj.get("settings") if proj and isinstance(proj.get("settings"), dict) else {}
+    try:
+        style = _caption_style_for_request(payload.get("style"), cfg.get("caption_style"),
+                                           settings.get("caption_style"))
+    except caption_style_mod.CaptionStyleError as e:
+        # a bad value in the request is a 400, never a repaired default
+        raise HTTPException(400, str(e))
+
+    kara = {"enabled": False, "color": "#FFD84D"}
+    kara.update(cfg.get("karaoke") or {})
+    if isinstance(settings.get("karaoke"), dict):
+        kara.update(settings["karaoke"])
+    if isinstance(payload.get("karaoke"), dict):
+        kara.update(payload["karaoke"])
+    if kara.get("color"):
+        try:
+            kara["color"] = caption_style_mod.parse_color(kara["color"], "karaoke.color")
+        except caption_style_mod.CaptionStyleError as e:
+            raise HTTPException(400, str(e))
+
+    lines = texts if texts else [text]
+    starts = [float(i) * 4.0 for i in range(len(lines))]
+    ends = [s + 3.6 for s in starts]
+    cues = captions_mod.cues_from_scenes([str(t) for t in lines], starts, ends, style=style)
+    if kara.get("enabled"):
+        from .engines.assembly import _with_word_timing
+
+        cues = _with_word_timing(cues, [str(t) for t in lines], starts, ends)
+
+    backdrop = ""
+    if payload.get("backdrop"):
+        cand = os.path.abspath(str(payload["backdrop"]))
+        if cand.startswith(os.path.abspath(st.data_root)) and os.path.exists(cand):
+            backdrop = cand
+    if not backdrop and proj:
+        backdrop = _project_backdrop(st, proj, int(payload.get("scene_idx", -1)))
+
+    at = payload.get("at_sec")
+    cache_key = None
+    if payload.get("cache", True) and not backdrop:
+        cache_key = (json.dumps(style, sort_keys=True), round(float(at or -1), 3), width, height,
+                     tuple(lines), kara.get("enabled"))
+        hit = _CAPTION_PREVIEW_CACHE.get(cache_key)
+        if hit and os.path.exists(hit[0]):
+            return FileResponse(hit[0], media_type="image/png",
+                                headers={**hit[1], "X-Caption-Cache": "hit"})
+    out_dir = ensure_dir(os.path.join(st.data_root, "caption-previews"))
+    name = f"preview_{new_id(10)}.png"
+    dst = os.path.join(out_dir, name)
+    try:
+        await asyncio.to_thread(captions_mod.preview_frame, cues, style, width, height, dst,
+                                float(at) if at is not None else None, backdrop or None, kara)
+    except captions_mod.CaptionError as e:
+        raise HTTPException(422, str(e))
+    meta = captions_mod.render_metadata(cues, style, width, height, kara)
+    # NB: JSON with the default ensure_ascii=True → \uXXXX escapes. HTTP header
+    # values are latin-1, so raw Khmer (sample text, coverage warnings) would blow
+    # up with UnicodeEncodeError instead of reaching the browser.
+    headers = {"X-Caption-Style": json.dumps(style),
+               "X-Caption-Font": json.dumps(meta["font"]),
+               "X-Caption-Warnings": json.dumps(meta["warnings"]),
+               "X-Caption-Url": f"/api/files?path={dst}",
+               "X-Caption-Lines": json.dumps(
+                   captions_mod.fit_text(lines[0], style, width, height)["lines"])}
+    if cache_key:
+        _CAPTION_PREVIEW_CACHE[cache_key] = (dst, headers)
+        if len(_CAPTION_PREVIEW_CACHE) > 64:
+            for k in list(_CAPTION_PREVIEW_CACHE)[:16]:
+                _CAPTION_PREVIEW_CACHE.pop(k, None)
+    else:
+        _prune_dir(out_dir, keep=40)
+    return FileResponse(dst, media_type="image/png", headers=headers)
+
+
+def _project_backdrop(st, proj, scene_idx=-1):
+    """A still frame of the project's own material, so preview contrast is real."""
+    try:
+        if scene_idx is not None and scene_idx >= 0:
+            a = st.db.latest_asset(proj["id"], "video_fit", scene_idx=scene_idx) or \
+                st.db.latest_asset(proj["id"], "video", scene_idx=scene_idx)
+            if a and a.get("path") and os.path.exists(a["path"]):
+                return a["path"]
+        for kind in ("final", "final_captions"):
+            a = st.db.latest_asset(proj["id"], kind)
+            if a and a.get("path") and os.path.exists(a["path"]):
+                return a["path"]
+    except Exception:
+        pass
+    return ""
+
+
+def _prune_dir(path, keep=40):
+    try:
+        files = sorted((os.path.join(path, f) for f in os.listdir(path)
+                        if f.endswith(".png")), key=os.path.getmtime, reverse=True)
+        for f in files[keep:]:
+            os.remove(f)
+    except Exception:
+        pass
+
+
+@router.get("/caption-style/previews")
+async def api_caption_style_previews(refresh: bool = Query(False),
+                                     font: str = Query(""), preset: str = Query("")):
+    """One real rendered PNG per preset (and per font), cached under the data dir."""
+    st = get_state()
+    return await asyncio.to_thread(_caption_style_previews, st, refresh, font, preset)
+
+
+def _caption_style_previews(st, refresh=False, font="", preset="", width=1080, height=1080):
+    root = ensure_dir(os.path.join(st.data_root, "style-previews", "captions"))
+    sample = "ជីវិតមនុស្ស មិនមែនជាការប្រណាំងទេ។"
+    out = {"source": {"width": width, "height": height, "text": sample}, "items": [],
+           "note": "rendered with the exporter's renderer (ffmpeg/libass + bundled fonts)"}
+    presets = [preset] if preset in caption_style_mod.PRESETS else list(caption_style_mod.PRESET_KEYS)
+    fonts = [font] if font in caption_style_mod.FONT_FAMILIES else list(caption_style_mod.FONT_FAMILIES)
+    for pkey in presets:
+        for fid in fonts:
+            style = {**caption_style_mod.preset_style(pkey), "font": fid}
+            style = caption_style_mod.normalize_style(style, strict=False)
+            dst = os.path.join(root, f"preset_{pkey}_{fid}.png")
+            err = ""
+            if refresh or not os.path.exists(dst):
+                try:
+                    captions_mod.preview_frame(
+                        [{"text": sample, "start": 0, "end": 3}], style, width, height, dst)
+                except captions_mod.CaptionError as e:
+                    err = str(e)
+            meta = captions_mod.render_metadata([{"text": sample, "start": 0, "end": 3}],
+                                                style, width, height)
+            out["items"].append({
+                "key": f"{pkey}:{fid}", "preset": pkey, "font": fid, "style": style,
+                "url": f"/api/files?path={dst}" if os.path.exists(dst) else "",
+                "font_report": meta["font"], "warnings": meta["warnings"],
+                "error": err,
+                "label": f"{caption_style_mod.PRESETS[pkey]['label']} · "
+                         f"{caption_style_mod.FONT_FAMILIES[fid]['family']}"})
+    out["capabilities"] = captions_mod.capabilities(st.config())
+    return out
+
+
+@router.post("/projects/{project_id}/render-captions")
+async def api_render_captions(project_id: str, payload: dict = Body(default={})):
+    """Burn captions onto the existing cut with new settings — no pipeline re-run.
+
+    This is what makes typography iteration practical: the narration and picture
+    are already rendered, only the caption layer changes. If captions were
+    already burned, the *uncaptioned* master is re-used so overlays never stack.
+    """
+    st = get_state()
+    proj = st.db.get_project(project_id)
+    if not proj:
+        raise HTTPException(404, "project not found")
+    scenes = st.db.list_scenes(project_id)
+    if not scenes:
+        raise HTTPException(400, "this project has no scenes yet — run the pipeline first")
+    settings = proj.get("settings") if isinstance(proj.get("settings"), dict) else {}
+    try:
+        style = _caption_style_for_request(payload.get("style"),
+                                           st.config().get("caption_style"),
+                                           settings.get("caption_style"))
+    except caption_style_mod.CaptionStyleError as e:
+        raise HTTPException(400, str(e))
+
+    src = None
+    for kind in ("final", "final_captions"):
+        a = st.db.latest_asset(project_id, kind)
+        if a and os.path.exists(a["path"]):
+            src = a
+            break
+    if not src:
+        raise HTTPException(400, "no finished cut to caption yet — run the pipeline first")
+    base = src["path"]
+    if src["kind"] == "final_captions":
+        # strip the previous caption layer: re-render from the silent master
+        cand = os.path.join(os.path.dirname(base),
+                            os.path.basename(base).replace(".captions.mp4", ".mp4"))
+        if os.path.exists(cand):
+            base = cand
+
+    from .engines.assembly import _with_word_timing, karaoke_for
+
+    kara = karaoke_for(st.config(), proj)
+    kara["enabled"] = bool(payload.get("karaoke", {}).get("enabled", kara.get("enabled")))
+    if isinstance(payload.get("karaoke"), dict) and payload["karaoke"].get("color"):
+        try:
+            kara["color"] = caption_style_mod.parse_color(payload["karaoke"]["color"],
+                                                          "karaoke.color")
+        except caption_style_mod.CaptionStyleError as e:
+            raise HTTPException(400, str(e))
+
+    # per-scene windows: re-derive from the rendered cut so the captions match it
+    info = captions_mod.probe_size(base)
+    total = media_duration(base, 0.0)
+    est = [max(0.8, float(s.get("audio_duration") or s.get("estimated_duration_sec") or 4.0))
+           for s in scenes]
+    total_est = sum(est) or 1.0
+    starts, cursor = [], 0.0
+    for d in est:
+        starts.append(round(cursor, 4))
+        cursor += (total / total_est) * d
+    ends = [starts[i + 1] if i + 1 < len(starts) else round(total, 4)
+            for i in range(len(starts))]
+    texts = [khmer.display_text(s.get("text", "")) for s in scenes]
+    cues = captions_mod.cues_from_scenes(texts, starts, ends, style=style)
+    if kara.get("enabled"):
+        cues = _with_word_timing(cues, texts, starts, ends)
+
+    out_dir = os.path.join(st.data_root, "projects", project_id, "final")
+    ensure_dir(out_dir)
+    dst = os.path.join(out_dir, os.path.basename(base).replace(
+        ".mp4", f".captions-{new_id(4)}.mp4"))
+    ass = dst.replace(".mp4", ".ass")
+    try:
+        captions_mod.write_ass(cues, style, info["width"], info["height"], ass, karaoke=kara,
+                               title=proj.get("title") or "")
+        await asyncio.to_thread(captions_mod.burn, base, ass, dst, style)
+    except captions_mod.CaptionError as e:
+        raise HTTPException(422, str(e))
+    meta = captions_mod.render_metadata(cues, style, info["width"], info["height"], kara)
+    run_id = proj.get("last_run_id") or ""
+    row = st.db.add_asset(project_id, "final_captions", dst,
+                          relpath=os.path.relpath(dst, st.data_root),
+                          stage="caption-render", run_id=run_id, scene_idx=-1,
+                          mime="video/mp4", duration=media_duration(dst, 0.0),
+                          meta={"of": os.path.basename(base), "style": style,
+                                "engine": "ffmpeg/libass", "font": meta["font"],
+                                "warnings": meta["warnings"], "karaoke": meta["karaoke"],
+                                "revision": new_id(6)})
+    asset_id = row["id"]
+    return {"ok": True, "asset_id": asset_id, "path": dst, "url": f"/api/assets/{asset_id}/stream",
+            "download": f"/api/assets/{asset_id}/download?cap=1",
+            "style": style, "font": meta["font"], "warnings": meta["warnings"],
+            "bounds_warnings": meta["bounds_warnings"], "cues": len(cues),
+            "duration": media_duration(dst, 0.0), "karaoke": meta["karaoke"],
+            "source": os.path.basename(base),
+            "note": "captions re-rendered onto the existing cut; the pipeline was not re-run"}
+
+
 # ============================================================ content types
 @router.get("/content-types")
 async def api_content_types():
@@ -1318,24 +1846,26 @@ def _style_previews(st, refresh=False):
     srt_path = os.path.join(root, "sample.srt")
     write_text_file(srt_path, _sample_srt(total_dur, 2.6))
     sub_styles, title_styles = [], []
-    for key in media.SUBTITLE_STYLE_KEYS:
+    # sample clip = the studio's caption style on a real 2.8s previz scene, i.e. the
+    # same renderer, the same bundled fonts and the same measured layout as an export
+    payload = media.SUBTITLE_STYLES_payload()
+    for key, info in payload.items():
         out = os.path.join(root, f"subtitles_{key}.mp4")
         err = ""
         if refresh or not os.path.exists(out):
             try:
-                media.burn_subtitles(base_mp4, srt_path, out, style=key)
+                cues = captions_mod.parse_srt(srt_path)
+                captions_mod.write_ass(cues, info["style"], 480, 854,
+                                       os.path.join(root, f"subtitles_{key}.ass"),
+                                       karaoke=info["style"].get("karaoke"))
+                captions_mod.burn(base_mp4, os.path.join(root, f"subtitles_{key}.ass"), out,
+                                  info["style"])
             except Exception as e:
-                err = str(e)[:180]
-                # a failed sample must still be LISTED (honest badge), never a gap
-                try:
-                    media.burn_subtitles(base_mp4, srt_path, out, style="clean")
-                except Exception as e2:
-                    err = f"{err}; even clean burn failed: {str(e2)[:120]}"
-        sub_styles.append({"key": key, "label": media.SUBTITLE_STYLES[key]["label"],
+                err = str(e)[:200]
+        sub_styles.append({"key": key, "label": info["label"],
                            "url": f"/api/files?path={os.path.abspath(out)}" if os.path.exists(out) else "",
-                           "desc": media.SUBTITLE_STYLES[key].get(
-                               "desc") or media.SUBTITLE_STYLES[key].get("description", ""),
-                           "font_size": media.SUBTITLE_STYLES[key].get("font_size"),
+                           "desc": info["desc"],
+                           "style": info["style"], "preset": info["preset"],
                            "error": err})
     for key in media.TITLE_STYLE_KEYS:
         out = os.path.join(root, f"title_{key}.mp4")

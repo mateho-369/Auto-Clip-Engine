@@ -1,27 +1,40 @@
 :root {
-  --bg: #141518;
-  --bg2: #1b1d21;
-  --bg3: #23262c;
-  --line: #2e323a;
-  --line2: #3a3f49;
-  --tx: #d7dbe2;
-  --tx2: #9aa1ad;
-  --tx3: #6b7280;
-  --acc: #e8b f30;
-  --acc: #e3a92e;
-  --acc2: #f0c65a;
-  --blue: #4f8ef7;
-  --green: #41c98a;
-  --red: #f06666;
-  --yellow: #e3a92e;
+  /* calm charcoal/navy workspace with a restrained teal + warm-gold accent */
+  --bg: #10151c;
+  --bg2: #161d27;
+  --bg3: #1e2733;
+  --line: #27313f;
+  --line2: #35445a;
+  --border: #27313f;               /* was undefined before — several rules used it */
+  --tx: #dde4ee;
+  --tx2: #a3b0c2;
+  --tx3: #7b8798;
+  --acc: #d8a33c;                  /* warm gold — primary action, active stage */
+  --acc2: #f2c96b;
+  --teal: #37b3a4;                 /* editor/selection accent */
+  --teal-dim: #1f5e59;
+  --blue: #5f9ef8;
+  --green: #43c98d;
+  --red: #f2706f;
+  --yellow: #e0b455;
   --mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+  --ui-font: "Inter", "Segoe UI", system-ui, -apple-system, "Noto Sans Khmer", sans-serif;
+  --khmer: "Noto Sans Khmer", "Kantumruy Pro", "Battambang", "Khmer OS", sans-serif;
+  --radius: 10px;
+  --shadow: 0 8px 26px rgba(0, 0, 0, .38);
 }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--tx);
-  font: 13px/1.45 "Inter", "Segoe UI", system-ui, sans-serif;
+  font: 13.5px/1.5 var(--ui-font);
   -webkit-font-smoothing: antialiased;
+}
+/* Khmer labels must render with a real Khmer font, not the Latin UI fallback */
+.kh, .typography legend, .khmer-sample { font-family: var(--khmer); }
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
+textarea:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--teal); outline-offset: 1px; border-radius: 4px;
 }
 h1,h2,h3,h4 { margin: 0; font-weight: 600; letter-spacing: .2px; }
 a { color: var(--blue); text-decoration: none; }
@@ -225,3 +238,74 @@ textarea.scene-text { min-height: 54px; }
 .modal { background: var(--bg2); border: 1px solid var(--line2); border-radius: 10px; max-width: 760px; width: 92vw; max-height: 88vh; overflow: auto; }
 .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line2); border-top-color: var(--acc); border-radius: 50%; animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ==========================================================================
+   Typography & Captions inspector
+   Preview sits beside the controls on wide screens and stacks on narrow ones;
+   the preview itself is a real PNG rendered by the exporter's renderer.
+   ========================================================================== */
+.typography { padding: 12px; }
+.cap-grid { display: grid; grid-template-columns: minmax(260px, 380px) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 1180px) { .cap-grid { grid-template-columns: 1fr; } }
+.cap-preview { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 6px; }
+@media (max-width: 1180px) { .cap-preview { position: static; } }
+.cap-stage {
+  position: relative; width: 100%; background: #0b0f14; border: 1px solid var(--line);
+  border-radius: var(--radius); overflow: hidden; display: flex; align-items: center; justify-content: center;
+}
+.cap-stage img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.cap-busy { position: absolute; inset: auto 8px 8px auto; background: rgba(10,14,20,.75); padding: 4px 8px; border-radius: 6px; }
+.cap-controls { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.typography fieldset {
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px 12px;
+  background: linear-gradient(180deg, rgba(255,255,255,.012), transparent);
+}
+.typography legend {
+  font-size: 12px; letter-spacing: .3px; color: var(--acc2); padding: 0 6px;
+}
+.typography label.fld { margin-bottom: 8px; }
+.typography input[type=range] { width: 100%; accent-color: var(--teal); padding: 0; background: transparent; border: 0; }
+.typography input[type=color] { width: 34px; height: 28px; padding: 1px; background: #0d1116; }
+.typography input.hex { width: 96px; font-family: var(--mono); font-size: 11.5px; text-transform: uppercase; }
+.row.tight { gap: 10px; align-items: flex-start; }
+.row.tight > .fld { margin-bottom: 0; }
+.grow { flex: 1 1 140px; min-width: 120px; }
+.colorfield .row { align-items: center; }
+.switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tx2); }
+.switch input { width: auto; }
+.khmer-sample {
+  margin-top: 6px; padding: 8px 10px; background: #0d1116; border: 1px dashed var(--line2);
+  border-radius: 8px; font-size: 19px; line-height: 1.7; color: #f2f5f9;
+}
+.preset-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+.preset {
+  background: #0f141b; border: 1px solid var(--line); border-radius: 9px; padding: 4px;
+  display: flex; flex-direction: column; gap: 4px; align-items: stretch; color: var(--tx2);
+  font-size: 11.5px; text-align: center;
+}
+.preset:hover { border-color: var(--line2); color: var(--tx); }
+.preset.on { border-color: var(--teal); box-shadow: 0 0 0 1px var(--teal) inset; color: #fff; }
+.preset img { width: 100%; height: 74px; object-fit: cover; border-radius: 6px; background: #0b0f14; }
+.warnline { color: var(--yellow); display: block; }
+.save-bar {
+  border-top: 1px solid var(--line); padding-top: 10px; display: flex; flex-direction: column; gap: 6px;
+  position: sticky; bottom: 0; background: linear-gradient(180deg, transparent, var(--bg2) 40%);
+}
+.cap-result video { width: 100%; border-radius: 8px; background: #000; max-height: 320px; }
+.btn.primary { background: #6f4f13; border-color: var(--acc); color: #ffe9b8; }
+.btn.primary:hover { background: #855f18; }
+.btn { background: #212b38; border-color: var(--line2); border-radius: 8px; }
+.btn:hover { background: #2b3746; }
+.panel { border-radius: var(--radius); }
+.panel-h { background: linear-gradient(180deg, var(--bg3), var(--bg2)); }
+.scene-text { font-family: var(--khmer); font-size: 14px; line-height: 1.6; }
+input, select, textarea { background: #0f141b; border-color: var(--line2); border-radius: 8px; }
+input:focus, select:focus, textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 1px var(--teal); }
+.split.wide-right { gap: 16px; }
+@media (max-width: 1100px) {
+  .body { grid-template-columns: 1fr; }
+  .side { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  .side h4 { display: none; }
+  .split, .split.wide-right { grid-template-columns: 1fr; }
+  .pad { padding: 12px; }
+}

@@ -5,9 +5,15 @@ wav. Output: one MP4 (H.264 yuv420p + AAC, faststart), plus an SRT, a poster
 frame and a `manifest.json` that records every scene, engine, prompt and file
 that produced this cut — the "memory" the brief wants, exported with the video.
 
-Assembly is deliberately forgiving: a scene with a missing clip gets the previz
-renderer or a black slate with the voice over it, and the manifest says which one
-happened, so the Director always gets a watchable cut instead of a stack trace.
+Assembly is deliberately forgiving about *pictures*: a scene with a missing clip
+gets the previz renderer or a black slate with the voice over it, and the
+manifest says which one happened, so the Director always gets a watchable cut
+instead of a stack trace.
+
+It is NOT forgiving about captions. If ``assembly.burn_captions`` is on and the
+burn cannot be done correctly (no libass in ffmpeg, the bundled font is missing,
+a scene has no timing), the stage fails with an actionable message — a request
+for captions is never answered with a silent uncaptioned MP4.
 """
 import os
 
@@ -104,13 +110,36 @@ def assemble(project, scenes, stage_assets, cfg, out_dir, run_id="", progress=No
     if progress:
         progress(72.0, "concatenating scenes")
     silent = os.path.join(out_dir, f"{project.get('id', 'project')}_{run_id or 'run'}.silent.mp4")
-    media.concat_clips(seg_videos, silent, fps=fps, transition=asm.get("transition", "crossfade"),
-                       fade=float(asm.get("fade_sec", 0.35)) if len(seg_videos) > 1 else 0.0,
+    transition = str(asm.get("transition", "crossfade"))
+    fade = float(asm.get("fade_sec", 0.35)) if len(seg_videos) > 1 else 0.0
+    media.concat_clips(seg_videos, silent, fps=fps, transition=transition, fade=fade,
                        work_dir=work)
+
+    # ---- crossfade pulls the picture timeline forward; the audio must follow ----
+    # xfade overlaps two clips by `fade` seconds, so an N-clip picture is
+    # (N-1)*fade shorter than the sum of the per-scene durations the narration was
+    # planned against. Leaving the voice delays at their pre-fade values is how
+    # captions and narration drift apart on a crossfaded cut — so the scene starts
+    # are recomputed from the real concatenated timeline whenever the transitions
+    # actually shortened the picture. On a hard cut nothing moves.
+    total_dur = media_duration(silent, cursor) or cursor
+    shortened = max(0.0, cursor - total_dur)
+    if shortened > 0.02 and starts:
+        notes.append(
+            f"picture is {shortened:.2f}s shorter than the scene sum because transitions "
+            f"overlap ({transition}, {fade:.2f}s) — narration offsets shifted to stay in sync")
+        new_starts = [max(0.0, starts[i] - i * (shortened / max(1, len(starts) - 1)))
+                      for i in range(len(starts))]
+        shift = [new_starts[i] - starts[i] for i in range(len(starts))]
+        for tr in voice_tracks + amb_tracks:
+            for i, sh in enumerate(shift):
+                if abs(tr["delay"] - starts[i]) < 0.02:
+                    tr["delay"] = round(max(0.0, tr["delay"] + sh), 4)
+                    break
+        starts = [round(x, 4) for x in new_starts]
 
     if progress:
         progress(84.0, "mixing narration + ambience")
-    total_dur = media_duration(silent, cursor) or cursor
     mix = os.path.join(work, "mix.wav")
     tracks = voice_tracks + amb_tracks
     info = media.mix_audio(tracks, mix, total_sec=total_dur,
@@ -134,38 +163,65 @@ def assemble(project, scenes, stage_assets, cfg, out_dir, run_id="", progress=No
     if not os.path.exists(final) or os.path.getsize(final) < 1024:
         raise RuntimeError("final encode failed (no readable MP4 produced)")
 
-    sub_style = str(asm.get("subtitle_style") or "clean")
+    # ---------------------------------------------------------------- captions
+    # One cue list feeds the SRT, the ASS, the burn and the manifest, so the
+    # sidecar subtitle, the burned captions and the reported timings cannot drift
+    # apart. `ends` are the real per-scene end times (starts[i+1] / total_dur) —
+    # the previous writer ended the last cue at `start + 3s`, which cut the final
+    # line short or left it on screen after the audio had stopped.
+    from .. import caption_style as caption_style_mod
+    from .. import captions as captions_mod
+
+    cap_style = caption_style_mod.merge_styles(
+        cfg.get("caption_style") or caption_style_mod.DEFAULT_STYLE,
+        project.get("settings", {}).get("caption_style")
+        if isinstance(project.get("settings"), dict) else None,
+        asm.get("caption_style") if isinstance(asm.get("caption_style"), dict) else None)
+    karaoke = karaoke_for(cfg, project)
+    cap_texts = [khmer.display_text(s.get("text", "")) for s in scenes]
+    cap_ends = [starts[i + 1] if i + 1 < len(starts) else total_dur
+                for i in range(len(scenes))]
+    cues = captions_mod.cues_from_scenes(cap_texts, starts, cap_ends, style=cap_style)
+    if karaoke.get("enabled"):
+        cues = _with_word_timing(cues, cap_texts, starts, cap_ends)
+    render_meta = captions_mod.render_metadata(cues, cap_style, width, height, karaoke=karaoke)
+    for w in render_meta["warnings"]:
+        notes.append(f"caption note: {w}")
+    for w in render_meta["bounds_warnings"]:
+        notes.append(f"caption bounds: {w}")
+
+    sub_style = str(asm.get("subtitle_style") or cap_style.get("preset") or "clean")
     out = {"path": final, "duration": media_duration(final, total_dur),
            "size_bytes": os.path.getsize(final), "width": width, "height": height,
            "fps": fps, "scenes": len(scenes), "notes": notes,
            "audio_peak_info": info, "line_gap_sec": gap, "title_style": title_style,
-           "subtitle_style": sub_style}
+           "subtitle_style": sub_style, "caption_style": cap_style,
+           "caption_metadata": render_meta}
 
     if asm.get("emit_srt", True):
         srt = os.path.join(out_dir, os.path.splitext(os.path.basename(final))[0] + ".srt")
-        # display_text: [[silent: …]] words stay on screen even though not spoken
-        media.write_srt([khmer.display_text(s.get("text", "")) for s in scenes], starts, srt)
+        captions_mod.write_srt(cues, srt, style=cap_style, width=width, height=height)
         out["srt"] = srt
     if asm.get("burn_captions"):
-        try:
-            burned = final.replace(".mp4", ".captions.mp4")
-            if sub_style == "karaoke" and out.get("srt"):
-                ass = os.path.join(out_dir, os.path.splitext(os.path.basename(final))[0] + ".ass")
-                k_end = [starts[i + 1] if i + 1 < len(starts) else total_dur
-                         for i in range(len(scenes))]
-                windows = [(starts[i], max(starts[i] + 0.6, k_end[i]),
-                            khmer.display_text(s.get("text", "")))
-                           for i, s in enumerate(scenes)]
-                media.write_karaoke_ass(windows, ass, width=width, height=height)
-                media.burn_ass(final, ass, burned, style="karaoke")
-                out["ass"] = ass
-                notes.append(f"captions burned with karaoke style (proportional word timing)")
-            else:
-                media.burn_subtitles(final, out["srt"], burned, style=sub_style)
-                notes.append(f"captions burned with '{sub_style}' style")
-            out["with_captions"] = burned
-        except Exception as e:
-            notes.append(f"caption burn-in skipped: {str(e)[:140]}")
+        # No try/except here on purpose: a requested caption burn that cannot be
+        # done must fail loudly (see the module docstring). The scheduler records
+        # the error and the UI shows it; the uncaptioned MP4 stays available.
+        burned = final.replace(".mp4", ".captions.mp4")
+        ass = os.path.join(out_dir, os.path.splitext(os.path.basename(final))[0] + ".ass")
+        captions_mod.write_ass(cues, cap_style, width, height, ass, karaoke=karaoke,
+                               title=project.get("title") or "")
+        captions_mod.burn(final, ass, burned, cap_style)
+        out["ass"] = ass
+        out["with_captions"] = burned
+        out["with_captions_duration"] = media_duration(burned, total_dur)
+        notes.append(
+            f"captions burned: {caption_style_mod.FONT_FAMILIES[cap_style['font']]['family']} "
+            f"{cap_style['weight']} · {cap_style['preset']} · "
+            f"{captions_mod.probe_size(burned)['width']}x{captions_mod.probe_size(burned)['height']}"
+            + (" · karaoke (proportional word timing, not forced alignment)"
+               if karaoke.get("enabled") else ""))
+    if out.get("ass"):
+        out["ass"] = out["ass"]
     poster = media.thumbnail(final, os.path.join(out_dir, os.path.splitext(
         os.path.basename(final))[0] + ".poster.png"), at_sec=0.4, width=min(360, width))
     if poster:
@@ -224,11 +280,18 @@ def _manifest(project, scenes, stage_assets, starts, out, cfg, run_id, notes):
         "pacing": {"line_gap_sec": out.get("line_gap_sec"),
                    "title_style": out.get("title_style"),
                    "subtitle_style": out.get("subtitle_style")},
+        "captions": out.get("caption_metadata"),
         "video": {"path": os.path.basename(out.get("path", "")), "duration": out.get("duration"),
                   "width": out.get("width"), "height": out.get("height"), "fps": out.get("fps"),
                   "size_bytes": out.get("size_bytes")},
-        "engines": {"voice": cfg.get("tts", {}).get("engine"), "timbre": cfg.get("rvc", {}).get("engine"),
-                    "video": cfg.get("video", {}).get("engine"), "sfx": cfg.get("sfx", {}).get("engine")},
+        "engines": {"voice": cfg.get("tts", {}).get("engine"),
+                    "voice_resolved": (cfg.get("tts", {}) or {}).get("_resolved_engine"),
+                    "timbre": cfg.get("rvc", {}).get("engine"), "video": cfg.get("video", {}).get("engine"),
+                    "sfx": cfg.get("sfx", {}).get("engine")},
+        "assets": {"final": os.path.basename(out.get("path", "")),
+                   "captioned": os.path.basename(out.get("with_captions", "")) or None,
+                   "srt": os.path.basename(out.get("srt", "")) or None,
+                   "ass": os.path.basename(out.get("ass", "")) or None},
         "scenes": [{
             "idx": s.get("idx"), "start": round(starts[i], 3), "text": s.get("text"),
             "visual_prompt": s.get("visual_prompt"), "mood_tag": s.get("mood_tag"),
@@ -240,3 +303,46 @@ def _manifest(project, scenes, stage_assets, starts, out, cfg, run_id, notes):
         } for i, s in enumerate(scenes)],
         "notes": notes,
     }
+
+
+def karaoke_for(cfg, project=None):
+    """Is the karaoke highlight on, and in what colour? (off unless configured)
+
+    Karaoke timing is a *proportional estimate* derived from the scene's own
+    audio window and the syllable weights — the pipeline has no word-level
+    timestamps. It is reported as such in the render metadata and the manifest;
+    it is never presented as forced alignment.
+    """
+    src = {}
+    if isinstance(project, dict) and isinstance(project.get("settings"), dict):
+        src = {**(project["settings"].get("karaoke") or {})}
+    src = {**(cfg.get("karaoke") or {}), **src}
+    return {"enabled": bool(src.get("enabled", False)),
+            "color": str(src.get("color") or "#FFD84D"),
+            "timing": "proportional estimate from scene audio windows (not forced alignment)"}
+
+
+def _with_word_timing(cues, texts, starts, ends):
+    """Attach ``[(word, start, end)]`` to each cue — karaoke style, whole-line text.
+
+    The word list is only used to place ``\k`` tags *inside* an already wrapped,
+    cluster-safe line; the displayed text always comes from the original string,
+    so punctuation, repeated-word signs (ៗ) and coeng stacks survive untouched.
+    """
+    windows = []
+    for i, text in enumerate(texts):
+        windows.append((float(starts[i]), float(ends[i]), text))
+    out = []
+    for cue in cues:
+        words = media.words_for_timing(cue.get("text", ""))
+        s0, s1 = float(cue.get("start", 0)), float(cue.get("end", 0))
+        span = max(0.2, s1 - s0)
+        total = sum(w for _t, w in words) or 1.0
+        acc, timed = 0.0, []
+        for word, weight in words:
+            a = s0 + span * acc / total
+            acc += weight
+            b = s0 + span * acc / total
+            timed.append((word, round(a, 3), round(b, 3)))
+        out.append({**cue, "words": timed})
+    return out
