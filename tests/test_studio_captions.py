@@ -11,7 +11,7 @@ import os
 
 import pytest
 
-from ai_studio import captions as cap, config as cfg_mod, khmer
+from ai_studio import captions as cap, config as cfg_mod, khmer, media
 
 # The task's required regression sentences — must survive wrap/build exactly.
 REQUIRED_TEXTS = [
@@ -265,3 +265,29 @@ def test_preview_endpoint_bare_preset_expands_not_clobbered(tmp_path):
             "background": "dark", "text": REQUIRED_TEXTS[1],
         })
         assert r2.status_code == 200
+
+
+@pytest.mark.skipif(not HAS_UHB, reason="needs uharfbuzz (shaping)")
+def test_title_cards_and_style_gallery_use_the_caption_renderer(tmp_path):
+    """Title cards + gallery samples burn through captions.build_ass with
+    bundled fonts — drawtext/PIL text is banned (Khmer tofu, no shaping)."""
+    # 1) title style mapping is a validated modern style with a bundled font
+    for key in media.TITLE_STYLE_KEYS:
+        cs = media.title_caption_style(media.TITLE_STYLES[key])
+        assert cs["font"] in cap.FONTS and cs["font"] == "moul"
+        assert cs["weight"] in cap.FONTS[cs["font"]]["weights"]
+    # 2) a real title card renders: libass-burned MP4 with visible glyphs
+    out = str(tmp_path / "title_centered_fade.mp4")
+    media.render_title_card(out, "មួយជំហាន ឆ្ពោះទៅមុខ", "centered_fade", 480, 854, 20, 2.2)
+    assert os.path.getsize(out) > 10_000
+    ass = open(str(tmp_path / "title_centered_fade.ass"), encoding="utf-8").read()
+    assert "Moul" in ass and "\\fad(350,450)" in ass
+    # 3) the gallery burn helper renders real sample clips
+    from ai_studio import previz
+    base = str(tmp_path / "base.mp4")
+    previz.render_clip(base, duration=1.2, width=480, height=854, fps=16,
+                       mood_tag="calm-warm", visual_prompt="quiet field", seed=3)
+    clip = str(tmp_path / "sample_clean.mp4")
+    media.burn_caption_clip(base, [(0.1, 0.9, REQUIRED_TEXTS[0])],
+                            {"preset": "clean"}, clip)
+    assert os.path.getsize(clip) > 10_000

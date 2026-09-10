@@ -532,7 +532,8 @@ def _pack_karaoke_pixels(tags: list[str], shaper: "Shaper", budget_px: float) ->
 
 
 def build_ass(blocks: list[tuple[float, float, str]], style: dict, out_w: int, out_h: int,
-              dst: str, karaoke: bool | None = None) -> dict:
+              dst: str, karaoke: bool | None = None,
+              fade: tuple[int, int] | None = None) -> dict:
     """Write the caption .ass for `blocks` = [(start, end, text), …].
 
     ONE Dialogue event per caption block, lines joined with \\N: libass draws
@@ -585,6 +586,8 @@ def build_ass(blocks: list[tuple[float, float, str]], style: dict, out_w: int, o
             body = "\\N".join(packed)
         else:
             body = "\\N".join(p["lines"])
+        if fade:
+            body = ("{\\fad(%d,%d)}" % (int(fade[0]), int(fade[1]))) + body
         events.append(f"Dialogue: 0,{_fmt_ass_time(start)},{_fmt_ass_time(end)},Cap,,0,0,0,,"
                       f"{fsc}{body}")
     ensure_dir(os.path.dirname(dst) or ".")

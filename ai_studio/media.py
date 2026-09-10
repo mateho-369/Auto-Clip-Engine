@@ -375,40 +375,48 @@ _SUB_BASE = "FontName=Khmer OS Battambang,FontSize=15,PrimaryColour=&H00FFFFFF,"
             "MarginL=28,MarginR=28,Alignment=2"
 SUBTITLE_STYLES = {
     "clean": {"label": "Clean", "desc": "Today's look — white, centred, soft outline.",
-              "force_style": _SUB_BASE, "karaoke": False},
+              "force_style": _SUB_BASE, "karaoke": False,
+              "caption": {"preset": "clean"}},
     "bold_yellow": {"label": "Bold yellow",
-                    "desc": "High-contrast bold yellow — readable over bright b-roll.",
+                    "desc": "High-contrast bold yellow (preset: Bold social).",
                     "force_style": "FontName=Khmer OS Battambang,FontSize=17,"
                                    "PrimaryColour=&H0000FFFF,Bold=1,"
                                    "OutlineColour=&H80000000,BorderStyle=1,Outline=3,"
                                    "Shadow=1,MarginV=56,MarginL=24,MarginR=24,Alignment=2",
-                    "karaoke": False},
+                    "karaoke": False,
+                    "caption": {"preset": "bold_social"}},
     "minimal_top": {"label": "Minimal top",
                     "desc": "Small clean text pinned at the top — leaves the picture open.",
                     "force_style": "FontName=Khmer OS Battambang,FontSize=13,"
                                    "PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,"
                                    "BorderStyle=1,Outline=1,Shadow=0,MarginV=36,MarginL=28,"
                                    "MarginR=28,Alignment=8",
-                    "karaoke": False},
+                    "karaoke": False,
+                    "caption": {"preset": "clean", "position": "top", "size_pct": 3.6}},
     "karaoke": {"label": "Karaoke", "desc": "Word-by-word highlight (proportional timing).",
                 "force_style": "FontName=Khmer OS Battambang,FontSize=15,"
                                "PrimaryColour=&H0000FFFF,Bold=1,"
                                "SecondaryColour=&H00FFFFFF,OutlineColour=&HC0000000,"
                                "BorderStyle=1,Outline=2,Shadow=0,MarginV=56,MarginL=28,"
                                "MarginR=28,Alignment=2",
-                "karaoke": True},
+                "karaoke": True,
+                "caption": {"preset": "clean", "karaoke": True,
+                            "text_color": "#ffe23d"}},
 }
 TITLE_STYLE_KEYS = ("centered_fade", "bottom_left_minimal", "bold_pop")
 TITLE_STYLES = {
     "centered_fade": {"label": "Centered fade",
-                      "desc": "Title centre-frame, fades in and out.",
-                      "layout": "center", "fontsize": 52, "yellow": False},
+                      "desc": "Khmer display title centre-frame, fades in and out.",
+                      "layout": "center", "size_pct": 7.0, "yellow": False,
+                      "fade": (350, 450)},
     "bottom_left_minimal": {"label": "Bottom-left minimal",
-                            "desc": "Small title in the lower-left corner, stays quiet.",
-                            "layout": "bottom_left", "fontsize": 34, "yellow": False},
+                            "desc": "Small quiet title in the lower-left corner.",
+                            "layout": "bottom_left", "size_pct": 4.2, "yellow": False,
+                            "fade": (250, 350)},
     "bold_pop": {"label": "Bold pop",
-                 "desc": "Big bold yellow title with a hard outline.",
-                 "layout": "center", "fontsize": 58, "yellow": True},
+                 "desc": "Big yellow Moul display title with a hard outline.",
+                 "layout": "center", "size_pct": 8.6, "yellow": True,
+                 "fade": None},
 }
 
 
@@ -674,24 +682,95 @@ def _find_font():
 
 def render_title_card(dst, title, style="centered_fade", width=480, height=854, fps=24,
                       duration=2.6):
-    """A title intro clip (ffmpeg drawtext; PIL fallback if no font renders).
+    """Title intro clip — the SAME renderer as captions (libass + HarfBuzz).
 
-    ``style`` is one of :data:`TITLE_STYLES`. Safe for Khmer: with no
-    Khmer-capable font installed the PIL fallback draws the Latin/ASCII part and
-    the notes say so — the title card is optional and never breaks the cut.
+    ffmpeg drawtext and PIL cannot shape Khmer (tofu boxes, scrambled glyph
+    order), so the title TEXT is always burned through ``captions.build_ass``
+    with the bundled Moul display face; PIL only paints the quiet gradient
+    background card. ``style`` is one of :data:`TITLE_STYLES`.
     """
     spec = TITLE_STYLES.get(style, TITLE_STYLES["centered_fade"])
     duration = max(1.2, float(duration))
-    font = _find_font()
-    if font:
-        try:
-            return _render_title_drawtext(dst, title, spec, font, width, height, fps, duration)
-        except Exception:
-            pass
+    from . import captions as cap
+    cap_style = title_caption_style(spec)
+    ass = os.path.splitext(dst)[0] + ".ass"
+    cap.build_ass([(0.0, duration, str(title))], cap_style, width, height, ass,
+                  fade=spec.get("fade"))
+    bg = dst + ".bg.png"
+    _title_background(bg, spec, width, height)
+    silent = dst + ".bg.mp4"
     try:
-        return _render_title_pil(dst, title, spec, width, height, fps, duration, font)
-    except Exception as e:
-        raise RuntimeError(f"title card render failed (no font?): {str(e)[:120]}")
+        run_ffmpeg(["-loop", "1", "-i", bg, "-t", f"{duration:.3f}", "-r", str(fps),
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+                    "-pix_fmt", "yuv420p", "-y", silent])
+        burn_ass(silent, ass, dst)
+    finally:
+        for tmp in (bg, silent):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    if not os.path.exists(dst) or os.path.getsize(dst) < 1024:
+        raise RuntimeError("title card burn produced no readable MP4")
+    return dst
+
+
+def title_caption_style(spec):
+    """TITLE_STYLES spec → validated modern caption style (bundled fonts only).
+
+    Titles use Moul at display sizes; bold is intentionally NOT synthesised
+    for the yellow style (Moul ships regular only) — the weight comes from
+    the display face itself plus a thicker outline."""
+    from . import captions as cap
+    yellow = bool(spec.get("yellow"))
+    layout = spec.get("layout", "center")
+    mapped, _issues = cap.validate_style({
+        "preset": "custom",
+        "font": "moul", "weight": "regular",
+        "size_pct": float(spec.get("size_pct", 7.0)),
+        "text_color": "#ffe23d" if yellow else "#f5efe0",
+        "outline_color": "#101014",
+        "outline_px": 4.0 if yellow else 2.5,
+        "shadow": True, "shadow_strength": 0.6, "shadow_offset_px": 2,
+        "panel": {"enabled": False, "color": "#0e1116", "opacity": 0.62,
+                  "padding_px": 12, "radius_px": 10},
+        "position": "bottom" if layout == "bottom_left" else "center",
+        "align": "left" if layout == "bottom_left" else "center",
+        "margin_h_pct": 9.0 if layout == "bottom_left" else 6.0,
+        "margin_v_pct": 12.0 if layout == "bottom_left" else 8.0,
+        "line_spacing": 1.25, "max_line_width_pct": 92.0, "max_lines": 3,
+        "karaoke": False,
+    })
+    return mapped
+
+
+def _title_background(dst, spec, width, height):
+    """Quiet vertical-gradient card (PIL, graphics only — no text ever)."""
+    from PIL import Image
+    top, bottom = (26, 32, 48), (10, 13, 19)
+    img = Image.new("RGB", (int(width), int(height)))
+    px = img.load()
+    for y in range(int(height)):
+        t = y / max(1, int(height) - 1)
+        row = tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(3))
+        for x in range(int(width)):
+            px[x, y] = row
+    img.save(dst, "PNG")
+    return dst
+
+
+def burn_caption_clip(video, captions, caption_style, dst):
+    """Burn [(start, end, text), …] onto `video` via the ONE caption renderer.
+
+    Used by the style-preview gallery (and available to callers holding raw
+    text windows instead of an SRT): builds the ASS with the bundled-font
+    shaper and burns it with the standard libass filter + fontsdir."""
+    from . import captions as cap
+    style, _issues = cap.validate_style(caption_style or {"preset": "clean"})
+    work = os.path.splitext(dst)[0] + ".ass"
+    cap.build_ass(list(captions), style, 480, 854, work)
+    burn_ass(video, work, dst)
+    return dst
 
 
 def _esc_drawtext(s):

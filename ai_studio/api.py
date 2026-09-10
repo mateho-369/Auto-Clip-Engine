@@ -1458,17 +1458,24 @@ def _style_previews(st, refresh=False):
     srt_path = os.path.join(root, "sample.srt")
     write_text_file(srt_path, _sample_srt(total_dur, 2.6))
     sub_styles, title_styles = [], []
+    # sample caption windows (the same sentences the sample.srt carries) burned
+    # through the ONE caption renderer — previews cannot drift from exports
+    kh = "សួស្តី ថ្ងៃនេះយើងមកស្វែងយល់អំពីរឿងមួយ"
+    en = "hello world — subtitle preview"
+    sample_windows = [(0.25, min(1.6, total_dur - 0.4), kh),
+                      (min(1.65, total_dur - 1.0), min(2.7, total_dur - 0.1), en)]
     for key in media.SUBTITLE_STYLE_KEYS:
         out = os.path.join(root, f"subtitles_{key}.mp4")
         err = ""
         if refresh or not os.path.exists(out):
             try:
-                media.burn_subtitles(base_mp4, srt_path, out, style=key)
+                caption_style = media.SUBTITLE_STYLES[key].get("caption") or {"preset": "clean"}
+                media.burn_caption_clip(base_mp4, sample_windows, caption_style, out)
             except Exception as e:
                 err = str(e)[:180]
                 # a failed sample must still be LISTED (honest badge), never a gap
                 try:
-                    media.burn_subtitles(base_mp4, srt_path, out, style="clean")
+                    media.burn_caption_clip(base_mp4, sample_windows, {"preset": "clean"}, out)
                 except Exception as e2:
                     err = f"{err}; even clean burn failed: {str(e2)[:120]}"
         sub_styles.append({"key": key, "label": media.SUBTITLE_STYLES[key]["label"],
@@ -1477,6 +1484,24 @@ def _style_previews(st, refresh=False):
                                "desc") or media.SUBTITLE_STYLES[key].get("description", ""),
                            "font_size": media.SUBTITLE_STYLES[key].get("font_size"),
                            "error": err})
+    # the five modern presets, sampled with the same renderer (group: preset)
+    from . import captions as cap
+    for preset in cap.PRESETS:
+        if preset == "clean":
+            continue  # already shown as the Clean classic above
+        key = f"preset_{preset}"
+        out = os.path.join(root, f"subtitles_{key}.mp4")
+        err = ""
+        if refresh or not os.path.exists(out):
+            try:
+                media.burn_caption_clip(base_mp4, sample_windows, {"preset": preset}, out)
+            except Exception as e:
+                err = str(e)[:180]
+        if os.path.exists(out):
+            sub_styles.append({"key": key, "label": "Preset · " + preset.replace("_", " ").title(),
+                               "url": f"/api/files?path={os.path.abspath(out)}",
+                               "desc": "The Typography & Captions preset, burned by the export renderer.",
+                               "error": err})
     for key in media.TITLE_STYLE_KEYS:
         out = os.path.join(root, f"title_{key}.mp4")
         err = ""
