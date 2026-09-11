@@ -38,3 +38,6 @@ models/
 
 # React frontend deps (regenerate with npm ci; the built app lives in static/)
 ai_studio/frontend/node_modules/
+
+# studio runtime data (caption preview cache etc.)
+ai_studio/data/

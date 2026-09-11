@@ -54,6 +54,22 @@ def draw_captions(frame, words_timing, t, title=None, title_until=2.0, template_
 
 
 def _draw_center_text(frame, text, y, w, scale=1.0, color=(255, 255, 255), thickness=3, shadow=True):
+    # cv2.putText only supports the built-in Hershey vector fonts, which are
+    # Latin-only — it cannot draw Khmer at all. Route non-ASCII text through
+    # the shaped libass/HarfBuzz overlay (bundled Khmer fonts, correct coeng).
+    if any(ord(c) > 127 for c in text):
+        from .khmer_subtitles import render_khmer_text_overlay
+        h = frame.shape[0]
+        # user's patch spec: PIL font size int(28 * scale), no width factor
+        font_px = max(20, int(28 * scale))
+        # the Hershey call anchored the text TOP at y → mirror as top margin
+        render_khmer_text_overlay(
+            frame, text, font_px=font_px, color_bgr=color,
+            position="top", align="center",
+            margin_v_pct=max(2.0, y / h * 100.0),
+            margin_h_pct=8.0)
+        return
+
     (tw, th), _ = cv2.getTextSize(text, FONT, scale, thickness)
     x = int((w - tw) / 2)
     if shadow:

@@ -15,6 +15,39 @@ from .. import khmer, media, previz
 from ..util import (ensure_dir, jdump, media_duration, write_json)
 
 
+def _caption_windows(scenes, starts, k_end):
+    """One caption per SENTENCE (professional subtitle rhythm).
+
+    A scene's narration often holds two sentences; showing the whole scene
+    text at once produced stacked multi-line boxes with mid-sentence breaks.
+    Each scene window [start_i, k_end_i] is split at sentence boundaries and
+    the time distributed proportionally to sentence length (clusters) —
+    scene boundaries stay exact, in-scene sentence times are an estimate.
+    """
+    windows = []
+    for i, s in enumerate(scenes):
+        t0 = float(starts[i])
+        t1 = max(t0 + 0.6, float(k_end[i]))
+        disp = khmer.display_text(s.get("text", "")).strip()
+        if not disp:
+            continue
+        sents = [x.strip() for x in khmer.split_sentences(disp) if x.strip()]
+        if len(sents) <= 1:
+            windows.append((t0, t1, disp))
+            continue
+        weights = [max(4.0, float(khmer.cluster_len(x))) for x in sents]
+        total = sum(weights)
+        cur = t0
+        for j, (w, sent) in enumerate(zip(weights, sents)):
+            if j == len(sents) - 1:
+                windows.append((cur, t1, sent))
+            else:
+                end = cur + (t1 - t0) * (w / total)
+                windows.append((cur, end, sent))
+                cur = end
+    return windows
+
+
 def assemble(project, scenes, stage_assets, cfg, out_dir, run_id="", progress=None,
              allow_previz=True):
     """scenes: [{idx, text, ...}], stage_assets: {kind: {idx: {path, duration, meta}}}"""
@@ -30,9 +63,29 @@ def assemble(project, scenes, stage_assets, cfg, out_dir, run_id="", progress=No
 
     seg_videos, voice_tracks, amb_tracks, starts, notes = [], [], [], [], []
 
+    # ---- caption style: the validated, effective look for THIS project
+    # (global settings.captions ← project override / legacy subtitle_style key)
+    from .. import captions as cap_mod
+    cap_style = cap_mod.effective_style(project, cfg)
+    cap_warnings: list[str] = []
+
     # optional rendered title card (assembly.title_style) — a silent intro clip
     title_dur = 0.0
     title_style = str(asm.get("title_style") or "")
+
+    # ---- AV-sync note on transitions: an xfade crossfade OVERLAPS clips, so
+    # the joined picture is fade*(n-1) shorter than the sum of the parts.
+    # Narration delays, scene starts and the SRT are computed with the SAME
+    # overlap, so audio and captions stay locked to the picture. A crossfade
+    # is only used when explicitly configured; the default is a hard cut
+    # (zero drift by construction).
+    transition = str(asm.get("transition") or "cut")
+    fade = float(asm.get("fade_sec", 0.0) or 0.0)
+    n_seg_est = len(scenes) + (1 if title_style else 0)
+    eff_fade = fade if (transition == "crossfade" and fade > 0.02 and n_seg_est > 1) else 0.0
+    if transition == "crossfade" and eff_fade == 0.0 and fade > 0.02:
+        notes.append("crossfade requested but not applicable — using hard cuts "
+                     "(audio/caption sync stays exact)")
     if title_style:
         try:
             card = os.path.join(work, "title_card.mp4")
@@ -46,6 +99,9 @@ def assemble(project, scenes, stage_assets, cfg, out_dir, run_id="", progress=No
             notes.append(f"title card skipped: {str(e)[:140]}")
     cursor = title_dur
     total = len(scenes) or 1
+    if title_dur and eff_fade:
+        # the title card also overlaps the first scene under xfade
+        cursor = max(0.0, title_dur - eff_fade)
     for i, scene in enumerate(scenes):
         idx = int(scene.get("idx", i))
         if progress:
@@ -94,7 +150,7 @@ def assemble(project, scenes, stage_assets, cfg, out_dir, run_id="", progress=No
             amb_tracks.append({"path": ambient["path"], "gain": float(sfx_cfg.get("voice_duck_gain", 0.32)),
                               "delay": cursor, "fade_in": 0.25, "fade_out": 0.5})
         starts.append(cursor)
-        cursor += real_dur
+        cursor += real_dur - (eff_fade if i < total - 1 else 0.0)
         if progress:
             progress(100.0 * (i + 1) / total, f"scene {idx + 1}/{total}: {real_dur:.1f}s")
 
@@ -104,8 +160,9 @@ def assemble(project, scenes, stage_assets, cfg, out_dir, run_id="", progress=No
     if progress:
         progress(72.0, "concatenating scenes")
     silent = os.path.join(out_dir, f"{project.get('id', 'project')}_{run_id or 'run'}.silent.mp4")
-    media.concat_clips(seg_videos, silent, fps=fps, transition=asm.get("transition", "crossfade"),
-                       fade=float(asm.get("fade_sec", 0.35)) if len(seg_videos) > 1 else 0.0,
+    media.concat_clips(seg_videos, silent, fps=fps,
+                       transition="crossfade" if eff_fade > 0.02 else "cut",
+                       fade=eff_fade if eff_fade > 0.02 else 0.0,
                        work_dir=work)
 
     if progress:
@@ -134,38 +191,71 @@ def assemble(project, scenes, stage_assets, cfg, out_dir, run_id="", progress=No
     if not os.path.exists(final) or os.path.getsize(final) < 1024:
         raise RuntimeError("final encode failed (no readable MP4 produced)")
 
-    sub_style = str(asm.get("subtitle_style") or "clean")
     out = {"path": final, "duration": media_duration(final, total_dur),
            "size_bytes": os.path.getsize(final), "width": width, "height": height,
            "fps": fps, "scenes": len(scenes), "notes": notes,
            "audio_peak_info": info, "line_gap_sec": gap, "title_style": title_style,
-           "subtitle_style": sub_style}
+           "subtitle_style": cap_style.get("preset", "clean"),
+           "transition": ("crossfade" if eff_fade > 0.02 else "cut"),
+           "transition_fade_sec": eff_fade}
 
+    # ---- SRT sidecar: sentence timing across each scene's real window; the
+    # last scene ends at the video's actual length (no fake +3 s tail)
+    srt = ""
     if asm.get("emit_srt", True):
         srt = os.path.join(out_dir, os.path.splitext(os.path.basename(final))[0] + ".srt")
         # display_text: [[silent: …]] words stay on screen even though not spoken
-        media.write_srt([khmer.display_text(s.get("text", "")) for s in scenes], starts, srt)
+        media.write_srt([khmer.display_text(s.get("text", "")) for s in scenes], starts, srt,
+                        total_duration=media_duration(final, total_dur))
         out["srt"] = srt
-    if asm.get("burn_captions"):
+
+    # ---- burned captions: the SAME builder + libass path the preview uses.
+    # A requested burn that cannot render is a HARD error — we never hand back
+    # an uncaptioned MP4 as if it satisfied the request (the stage records the
+    # exact reason and the Director can retry or explicitly turn captions off).
+    burn_requested = bool(asm.get("burn_captions"))
+    burned, ass_path = "", ""
+    if burn_requested:
         try:
+            if not media._has_filter("subtitles"):
+                raise RuntimeError("this ffmpeg build has no libass 'subtitles' filter — "
+                                   "cannot burn captions (keep the SRT sidecar, or install "
+                                   "a full ffmpeg build)")
             burned = final.replace(".mp4", ".captions.mp4")
-            if sub_style == "karaoke" and out.get("srt"):
-                ass = os.path.join(out_dir, os.path.splitext(os.path.basename(final))[0] + ".ass")
-                k_end = [starts[i + 1] if i + 1 < len(starts) else total_dur
-                         for i in range(len(scenes))]
-                windows = [(starts[i], max(starts[i] + 0.6, k_end[i]),
-                            khmer.display_text(s.get("text", "")))
-                           for i, s in enumerate(scenes)]
-                media.write_karaoke_ass(windows, ass, width=width, height=height)
-                media.burn_ass(final, ass, burned, style="karaoke")
-                out["ass"] = ass
-                notes.append(f"captions burned with karaoke style (proportional word timing)")
-            else:
-                media.burn_subtitles(final, out["srt"], burned, style=sub_style)
-                notes.append(f"captions burned with '{sub_style}' style")
+            ass_path = os.path.join(out_dir, os.path.splitext(os.path.basename(final))[0] + ".ass")
+            k_end = [starts[i + 1] if i + 1 < len(starts) else out["duration"]
+                     for i in range(len(scenes))]
+            windows = _caption_windows(scenes, starts, k_end)
+            info_ass = cap_mod.build_ass(windows, cap_style, width, height, ass_path)
+            cap_warnings.extend(info_ass.get("warnings") or [])
+            media.burn_ass(final, ass_path, burned)
+            if not os.path.exists(burned) or os.path.getsize(burned) < 1024:
+                raise RuntimeError("libass burn produced no readable MP4")
             out["with_captions"] = burned
+            out["ass"] = ass_path
+            timing_mode = info_ass.get("timing", "sentence-window")
+            notes.append(f"captions burned · preset '{cap_style.get('preset')}' · "
+                         f"font {info_ass.get('font_family')} "
+                         f"({cap_style.get('weight')}) · timing: {timing_mode}"
+                         + (" (estimated, not forced alignment)" if info_ass.get("karaoke") else ""))
         except Exception as e:
-            notes.append(f"caption burn-in skipped: {str(e)[:140]}")
+            notes.append(f"caption burn-in FAILED: {str(e)[:220]}")
+            raise RuntimeError(f"caption burn-in failed: {str(e)[:220]}") from e
+
+    out["captions"] = {
+        "requested": burn_requested,
+        "burned": bool(burned and os.path.exists(burned)),
+        "asset": burned or "",
+        "primary": burned if (burned and os.path.exists(burned)) else final,
+        "preset": cap_style.get("preset"),
+        "font": cap_mod.font_family_name(cap_style["font"]),
+        "font_file": os.path.basename(cap_mod.font_file(cap_style["font"], cap_style["weight"])),
+        "renderer": "ffmpeg/libass (HarfBuzz shaping) — same path as the preview",
+        "timing": ("estimated-proportional (not forced alignment)" if cap_style.get("karaoke")
+                   else "sentence-window"),
+        "karaoke": bool(cap_style.get("karaoke")),
+        "warnings": cap_warnings,
+    }
     poster = media.thumbnail(final, os.path.join(out_dir, os.path.splitext(
         os.path.basename(final))[0] + ".poster.png"), at_sec=0.4, width=min(360, width))
     if poster:
@@ -223,8 +313,14 @@ def _manifest(project, scenes, stage_assets, starts, out, cfg, run_id, notes):
                     "target_duration": project.get("target_duration")},
         "pacing": {"line_gap_sec": out.get("line_gap_sec"),
                    "title_style": out.get("title_style"),
-                   "subtitle_style": out.get("subtitle_style")},
-        "video": {"path": os.path.basename(out.get("path", "")), "duration": out.get("duration"),
+                   "subtitle_style": out.get("subtitle_style"),
+                   "transition": out.get("transition"),
+                   "transition_fade_sec": out.get("transition_fade_sec")},
+        "captions": out.get("captions") or {},
+        "video": {"path": os.path.basename(out.get("captions", {}).get("primary")
+                                           or out.get("path", "")),
+                  "uncaptioned_path": os.path.basename(out.get("path", "")),
+                  "duration": out.get("duration"),
                   "width": out.get("width"), "height": out.get("height"), "fps": out.get("fps"),
                   "size_bytes": out.get("size_bytes")},
         "engines": {"voice": cfg.get("tts", {}).get("engine"), "timbre": cfg.get("rvc", {}).get("engine"),

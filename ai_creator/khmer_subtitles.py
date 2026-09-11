@@ -103,6 +103,139 @@ def wrap_khmer_text(text, max_chars=24):
     return lines
 
 
+def load_khmer_font(font_size):
+    """Load a Khmer-capable TrueType font for PIL text drawing.
+
+    NOTE (checked against PyPI, hash-verified): **no Pillow wheel from 10.4
+    through 12.0 bundles Raqm** (libraqm/libfribidi are absent from the
+    manylinux wheels), so `layout_engine=ImageFont.Layout.RAQM` warns and
+    silently falls back to BASIC layout — which does NO Khmer shaping
+    (coeng never stack, vowels never reorder). When Raqm is genuinely
+    available (source build with libraqm, or a future wheel that restores
+    it) this returns a shaping-capable font; otherwise callers MUST NOT use
+    this font for Khmer body text — use ``render_khmer_text_overlay()``
+    instead, which renders through the libass/HarfBuzz path that always
+    shapes correctly.
+
+    A shaping-capable layout engine is necessary but not sufficient: the
+    font file itself must contain Khmer glyphs. DejaVu Sans and Pillow's
+    built-in default font do not, and will silently render Khmer as tofu
+    boxes / nothing — so a real Khmer font must also be present.
+    """
+    import logging
+
+    from PIL import ImageFont, features
+
+    fonts_dir = os.path.join(os.path.dirname(__file__), "fonts")
+    font_candidates = [
+        os.path.join(fonts_dir, "NotoSansKhmer-Regular.ttf"),
+        os.path.join(fonts_dir, "KhmerOS.ttf"),
+        os.path.join(fonts_dir, "NotoSansKhmer.ttf"),
+        os.path.join(fonts_dir, "Battambang-Regular.ttf"),
+        "/usr/share/fonts/truetype/khmeros/KhmerOS.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansKhmer-Regular.ttf",
+    ]
+    raqm_ok = bool(features.check("raqm"))
+    for font_path in font_candidates:
+        if os.path.exists(font_path):
+            try:
+                if raqm_ok:
+                    return ImageFont.truetype(font_path, font_size,
+                                              layout_engine=ImageFont.Layout.RAQM)
+                logging.getLogger(__name__).warning(
+                    "Pillow was built without Raqm — '%s' would draw UNshaped "
+                    "Khmer (coeng never stack). Rendering Khmer through the "
+                    "libass/HarfBuzz overlay instead.", font_path)
+                return ImageFont.truetype(font_path, font_size)
+            except Exception:
+                continue
+
+    logging.getLogger(__name__).error(
+        "No Khmer-capable font found (checked %s) — Khmer text will render "
+        "as tofu boxes. Add NotoSansKhmer-Regular.ttf to %s.",
+        font_candidates, fonts_dir,
+    )
+    return ImageFont.load_default()
+
+
+def render_khmer_text_overlay(frame, text, font_px, color_bgr, position="bottom",
+                              align="center", margin_v_pct=None, margin_h_pct=None,
+                              panel=False, panel_color_bgr=(24, 20, 20),
+                              panel_opacity=0.7):
+    """Draw Khmer (or any non-ASCII) text on a BGR frame, SHAPED correctly.
+
+    Pillow's BASIC layout cannot shape Khmer and no Pillow wheel ships the
+    Raqm engine any more, so the text is rendered through the same
+    ffmpeg/libass + HarfBuzz path the studio uses for burned captions
+    (ai_studio.captions.build_ass: bundled OFL fonts, shaped pixel-width
+    wrapping, cluster-safe breaks). Raises RuntimeError honestly if this
+    ffmpeg has no libass — it never silently draws unshaped text.
+    """
+    import logging
+    import tempfile
+
+    h, w = frame.shape[:2]
+    from ai_studio import captions as cap
+    from ai_studio.util import run_ffmpeg
+    from ai_studio.media import _has_filter
+
+    if not _has_filter("subtitles"):
+        raise RuntimeError(
+            "this ffmpeg build has no libass 'subtitles' filter — cannot draw "
+            "shaped Khmer text (install a full ffmpeg build)")
+
+    def _hex_from_bgr(bgr):
+        r, g, b = int(bgr[2]), int(bgr[1]), int(bgr[0])
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    size_pct = round(max(1.5, font_px / float(h) * 100.0), 2)
+    if margin_v_pct is None:
+        margin_v_pct = 8.0 if position == "bottom" else 10.0
+    style, _issues = cap.validate_style({
+        "preset": "custom",
+        "font": "noto_sans_khmer", "weight": "regular",
+        "size_pct": size_pct,
+        "text_color": _hex_from_bgr(color_bgr),
+        "outline_color": "#101014", "outline_px": 2.0,
+        "shadow": True, "shadow_strength": 0.6, "shadow_offset_px": 2,
+        "panel": {"enabled": bool(panel), "color": _hex_from_bgr(panel_color_bgr),
+                  "opacity": float(panel_opacity), "padding_px": 12, "radius_px": 10},
+        "position": position, "align": align,
+        "margin_v_pct": float(margin_v_pct),
+        "margin_h_pct": float(margin_h_pct if margin_h_pct is not None else 6.0),
+        "line_spacing": 1.25, "max_line_width_pct": 90.0, "max_lines": 3,
+        "karaoke": False,
+    })
+
+    work = tempfile.mkdtemp(prefix="khmer_overlay_")
+    src_png = os.path.join(work, "frame.png")
+    out_png = os.path.join(work, "out.png")
+    ass_path = os.path.join(work, "text.ass")
+    try:
+        cv2.imwrite(src_png, frame)
+        cap.build_ass([(0.0, 5.0, str(text))], style, w, h, ass_path)
+        ass_esc = ass_path.replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+        fontsdir = cap.fonts_dir().replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+        run_ffmpeg(["-i", src_png, "-vf",
+                    f"subtitles='{ass_esc}':fontsdir='{fontsdir}'",
+                    "-frames:v", "1", "-y", out_png])
+        out = cv2.imread(out_png)
+        if out is None or out.shape[0] != h or out.shape[1] != w:
+            raise RuntimeError("libass overlay produced no readable frame")
+        np.copyto(frame, out)
+        return frame
+    finally:
+        for p in (src_png, out_png, ass_path):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        try:
+            os.rmdir(work)
+        except OSError:
+            pass
+
+
 def render_caption_frame(frame, words_timing, t, template_key="classic_yellow", title=None):
     """Renders captions on frame according to the chosen subtitle template."""
     tmpl = SUBTITLE_TEMPLATES.get(template_key, SUBTITLE_TEMPLATES["classic_yellow"])
@@ -137,69 +270,24 @@ def render_caption_frame(frame, words_timing, t, template_key="classic_yellow", 
     has_non_ascii = any(ord(c) > 127 for c in text_to_draw)
 
     if has_non_ascii:
-        from PIL import Image, ImageDraw, ImageFont
-        
-        # Convert BGR OpenCV frame to RGB PIL Image
-        pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        draw = ImageDraw.Draw(pil_img)
-
-        # Load font (prioritize bundled Khmer TTF fonts in ai_creator/fonts/)
-        font_size = int(24 * tmpl.get("font_scale", 1.0))
-        font = None
-        fonts_dir = os.path.join(os.path.dirname(__file__), "fonts")
-        font_candidates = [
-            os.path.join(fonts_dir, "KhmerOS.ttf"),
-            os.path.join(fonts_dir, "NotoSansKhmer.ttf"),
-            os.path.join(fonts_dir, "Battambang-Regular.ttf"),
-            "/usr/share/fonts/truetype/khmeros/KhmerOS.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        ]
-        for font_path in font_candidates:
-            if os.path.exists(font_path):
-                try:
-                    font = ImageFont.truetype(font_path, font_size)
-                    break
-                except Exception:
-                    pass
-        if font is None:
-            font = ImageFont.load_default()
-
-        # Calculate bounding box
-        bbox = draw.textbbox((0, 0), text_to_draw, font=font)
-        total_w = bbox[2] - bbox[0]
-        total_h = bbox[3] - bbox[1]
-
-        x = int((w - total_w) / 2)
-        y = int(h * 0.85)
-
-        # Draw background box if enabled
-        if tmpl.get("bg_box"):
-            pad_x, pad_y = 16, 12
-            box_x1 = max(10, x - pad_x)
-            box_y1 = max(10, y - pad_y)
-            box_x2 = min(w - 10, x + total_w + pad_x)
-            box_y2 = min(h - 10, y + total_h + pad_y + 4)
-            bg_color = tmpl.get("bg_color", (20, 20, 24, 180))
-            # Color RGB for PIL
-            r, g, b = bg_color[2], bg_color[1], bg_color[0]
-            draw.rectangle([box_x1, box_y1, box_x2, box_y2], fill=(r, g, b))
-
-        # Active phrase rendering
+        # Khmer shaping: Pillow BASIC layout cannot shape Khmer and no Pillow
+        # wheel ships Raqm any more, so draw via the libass/HarfBuzz overlay
+        # (same renderer as the studio's burned captions — bundled OFL fonts,
+        # cluster-safe wrap). The old code drew the whole 3-word phrase in the
+        # active color, so a single styled block preserves the look.
         active_color = tmpl.get("active_color", (0, 230, 255))
-        r_act, g_act, b_act = active_color[2], active_color[1], active_color[0]
-
-        # Draw stroke/shadow
-        stroke_color = tmpl.get("stroke_color", (0, 0, 0))
-        r_str, g_str, b_str = stroke_color[2], stroke_color[1], stroke_color[0]
-
-        for dx, dy in [(-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (1, 1)]:
-            draw.text((x + dx, y + dy), text_to_draw, font=font, fill=(r_str, g_str, b_str))
-
-        draw.text((x, y), text_to_draw, font=font, fill=(r_act, g_act, b_act))
-
-        # Convert back to OpenCV BGR frame
-        res_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-        np.copyto(frame, res_bgr)
+        # legacy PIL path used int(24 * font_scale) with NO width scaling
+        font_px = max(18, int(24 * tmpl.get("font_scale", 1.0)))
+        # the ASCII path anchors text with its top at h*0.85 → mirror that as
+        # a bottom margin
+        margin_v = max(4.0, (h - int(h * 0.85) - int(font_px * 1.3)) / h * 100.0)
+        render_khmer_text_overlay(
+            frame, text_to_draw, font_px=font_px, color_bgr=active_color,
+            position="bottom", align="center", margin_v_pct=margin_v,
+            panel=bool(tmpl.get("bg_box")),
+            panel_color_bgr=tmpl.get("bg_color", (20, 20, 24))[:3],
+            panel_opacity=tmpl.get("bg_color", (20, 20, 24, 180))[3] / 255.0
+            if len(tmpl.get("bg_color", (20, 20, 24, 180))) > 3 else 0.7)
         return frame
 
     # Standard ASCII rendering with OpenCV

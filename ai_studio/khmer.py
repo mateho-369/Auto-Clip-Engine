@@ -152,6 +152,140 @@ def clip_clusters(text, max_clusters):
     return truncate_clusters(text, max_clusters, suffix="")
 
 
+def words(text):
+    """Khmer-aware *word* tokens for caption wrapping and karaoke timing.
+
+    Uses the ``khmercut`` dictionary segmenter when it is installed, so a word
+    like យឺត stays whole (cluster-safe wrapping alone still breaks words at
+    cluster boundaries, which reads like hyphenating "bab/y" without the
+    hyphen). khmercut ships its dictionary in the wheel and works offline.
+    Falls back to whitespace splitting, then to 2-cluster pseudo-words for
+    scriptio-continua text that has no spaces at all.
+    """
+    t = (text or "").strip()
+    if not t:
+        return []
+    try:
+        from khmercut import tokenize  # optional dependency, offline dictionary
+        toks = [w for w in tokenize(t) if w.strip()]
+        if toks:
+            # line-break safety: a trailing sign (។ ៕ ៖ ៗ ! ? . ,) is part of
+            # the word it follows — it must never start a caption line. Merging
+            # here fixes wrapping AND keeps karaoke highlighting attached.
+            merged: list[str] = []
+            for tok in toks:
+                if merged and len(tok) == 1 and tok in "។៕៖ៗ？！?!.,，":
+                    merged[-1] += tok
+                else:
+                    merged.append(tok)
+            return merged
+    except Exception:
+        pass
+    if " " in t:
+        toks = [w for w in re.split(r"\s+", t) if w]
+        if toks:
+            return toks
+    units = split_clusters(t)
+    words, cur = [], []
+    for u in units:
+        cur.append(u)
+        if len(cur) >= 2:
+            words.append("".join(cur))
+            cur = []
+    if cur:
+        words.append("".join(cur))
+    return words
+
+
+def wrap_words(text, max_clusters=16, width_fn=None, budget_px=None):
+    """Wrap `text` into lines that break BETWEEN words, never inside one.
+
+    Break points come from `words()` — dictionary word boundaries when
+    khmercut is available. Source spaces are PRESERVED: the spaces the author
+    wrote stay in the rendered line, and a line break consumes the space it
+    breaks at instead of deleting it.
+
+    Width is measured with ``width_fn`` (e.g. shaped pixel widths from
+    captions.Shaper) when given, otherwise in character clusters — the visual
+    unit Khmer actually occupies. ``budget_px`` overrides the cluster budget
+    when measuring in pixels.
+    """
+    t = (text or "").strip()
+    if not t:
+        return [""]
+    toks: list[tuple[str, bool]] = []
+    for pi, phrase in enumerate(t.split(" ")):
+        if not phrase:
+            continue
+        for j, w in enumerate(words(phrase)):
+            toks.append((w, pi > 0 and j == 0))
+    measure = width_fn or (lambda s: cluster_len(s))
+    budget = float(budget_px) if budget_px else max(1, int(max_clusters))
+    space_w = measure(" ") if width_fn else 1.0
+
+    # token list with widths (a lone trailing sign stays glued to its word)
+    toks2: list[tuple[str, bool, float]] = []
+    for word, had_space in toks:
+        lone_punct = len(word) == 1 and word in "។៕៖？！?!.,，—–-/" and toks2
+        if lone_punct:
+            pw, _ps, _w = toks2[-1]
+            sep = " " if had_space else ""
+            toks2[-1] = (pw + sep + word, _ps, _w + (space_w if had_space else 0.0) + measure(word))
+            continue
+        toks2.append((word, had_space, measure(word)))
+    n = len(toks2)
+    if n == 0:
+        return [""]
+
+    # prefix widths: width(i,j) = shaped width of tokens i..j on one line
+    pref = [0.0]
+    for _w, _s, wd in toks2:
+        pref.append(pref[-1] + (space_w if _s else 0.0) + wd)
+    INF = float("inf")
+
+    def line_width(i: int, j: int) -> float:
+        return pref[j] - pref[i]
+
+    def line_cost(i: int, j: int, is_last: bool) -> float:
+        """Raggedness cost of tokens i..j as one (possibly last) line."""
+        leftover = budget - line_width(i, j)
+        if leftover >= 0:
+            # a single word alone on the final line reads as a mistake —
+            # balance instead (unless it is the only possible break)
+            orphan = is_last and j - i == 1 and n > 1
+            return (leftover * leftover) * (4.0 if orphan else 1.0)
+        if j - i == 1:
+            # one word wider than the whole line: allowed, flagged by caller
+            return (budget * budget) * 8.0
+        return INF
+
+    # DP minimum-raggedness: dp[j] = best cost of the first j tokens
+    dp = [INF] * (n + 1)
+    back = [-1] * (n + 1)
+    dp[0] = 0.0
+    for j in range(1, n + 1):
+        for i in range(j - 1, -1, -1):
+            if dp[i] == INF:
+                continue
+            c = dp[i] + line_cost(i, j, j == n)
+            if c < dp[j]:
+                dp[j] = c
+                back[j] = i
+    # fall back to one-word-per-line if even that is impossible
+    if dp[n] == INF:  # pragma: no cover (single tokens are always allowed)
+        return [w for w, _s, _wd in toks2]
+    bounds, j = [], n
+    while j > 0:
+        bounds.append((back[j], j))
+        j = back[j]
+    bounds.reverse()
+    out = []
+    for i, j in bounds:
+        parts = [(w, s and k > i) for k, (w, s, _wd) in enumerate(toks2) if i <= k < j]
+        out.append("".join((" " if s else "") + w for w, s in parts))
+    return out or [""]
+
+
 def wrap_clusters(text, max_clusters=16):
     """Wrap `text` at cluster boundaries: returns a list of lines, each at most
     ``max_clusters`` long (a single cluster longer than the budget is its own

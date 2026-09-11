@@ -351,9 +351,15 @@ async def stage_voice_final(ctx, idx):
     meta = {"converted": bool(res.get("converted")), "engine": res.get("engine"),
             "profile": (profile or {}).get("name", ""), "reason": res.get("reason", ""),
             "pitch": int(ctx.cfg["rvc"].get("pitch") or 0), **facts}
+    src_engine = ""
+    try:
+        src_engine = str((base.get("meta") or {}).get("engine") or "")
+    except Exception:
+        src_engine = ""
     msg = (f"voice in '{(profile or {}).get('name') or 'base'}' timbre · {facts['duration']:.2f}s"
            if res.get("converted") else
-           f"timbre not converted ({res.get('engine')}): {str(res.get('reason') or '')[:90]}")
+           f"timbre not converted ({res.get('engine')}) — keeping the Stage-3a voice "
+           f"{('(' + src_engine + ') ') if src_engine else ''}: {str(res.get('reason') or '')[:90]}")
     return {"ok": True, "engine": res.get("engine") or plan_rvc, "progress": 100.0,
             "message": msg,
             "assets": [{"kind": "voice_final", "path": out, "scene_idx": idx,
@@ -746,30 +752,44 @@ async def stage_assemble(ctx, _idx):
     final_path = res.get("path")
     if not final_path or not os.path.exists(final_path):
         return {"ok": False, "error": "assembly produced no file"}
-    assets = [{"kind": "final", "path": final_path, "scene_idx": -1,
+    cap_info = res.get("captions") or {}
+    # the asset the Director asked for: burned captions when they were built,
+    # otherwise the clean cut. Never the reverse.
+    primary_path = cap_info.get("primary") or final_path
+    assets = [{"kind": "final", "path": primary_path, "scene_idx": -1,
                "duration": res.get("duration", 0),
                "meta": {k: res.get(k) for k in ("width", "height", "fps", "notes", "scenes")}
                        | {"draft": any("previz" in str(n) or "black slate" in str(n)
-                                       for n in (res.get("notes") or []))}}]
-    for key, kind in (("srt", "srt"), ("poster", "poster"), ("manifest", "manifest"),
-                      ("with_captions", "final_captions")):
+                                       for n in (res.get("notes") or [])),
+                          "captions": ("burned" if cap_info.get("burned") else "none"),
+                          "caption_preset": cap_info.get("preset"),
+                          "caption_font": cap_info.get("font"),
+                          "caption_timing": cap_info.get("timing")}}]
+    if primary_path != final_path and os.path.exists(final_path):
+        assets.append({"kind": "final_uncaptioned", "path": final_path, "scene_idx": -1,
+                       "duration": res.get("duration", 0),
+                       "meta": {"of": os.path.basename(primary_path)}})
+    for key, kind in (("srt", "srt"), ("poster", "poster"), ("manifest", "manifest")):
         p = res.get(key)
         if p and os.path.exists(p):
-            asset_dur = res.get("duration", 0) if kind == "final_captions" else 0
             assets.append({"kind": kind, "path": p, "scene_idx": -1,
-                           "duration": asset_dur, "meta": {"of": os.path.basename(final_path)}})
+                           "duration": 0, "meta": {"of": os.path.basename(primary_path)}})
     dur = float(res.get("duration") or 0)
     want = float(ctx.project.get("target_duration") or 0)
     note = f"{dur:.1f}s · {res.get('width')}x{res.get('height')}@{res.get('fps')}"
+    if cap_info.get("burned"):
+        note += f" · captions burned ({cap_info.get('preset')}, {cap_info.get('font')})"
+    else:
+        note += " · no burned captions"
     if want:
         note += f" (target {want:.0f}s, {100.0 * dur / want:.0f}%)"
     return {"ok": True, "engine": "ffmpeg", "progress": 100.0, "message": note,
             "assets": assets,
             "project_update": {"status": "done"},
-            "run_update": {"final_path": final_path, "duration": round(dur, 2),
-                           "size_bytes": os.path.getsize(final_path)},
+            "run_update": {"final_path": primary_path, "duration": round(dur, 2),
+                           "size_bytes": os.path.getsize(primary_path)},
             "notes": res.get("notes") or [],
-            "final_asset_path": final_path}
+            "final_asset_path": primary_path}
 
 
 STAGE_IMPL = {

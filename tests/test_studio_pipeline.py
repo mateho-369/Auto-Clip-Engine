@@ -757,8 +757,12 @@ def test_style_previews_endpoint_renders_cached_samples(tmp_path):
     r = cli.get("/api/style-previews")
     assert r.status_code == 200, r.text
     data = r.json()
-    assert {s["key"] for s in data["subtitle_styles"]} == {"clean", "bold_yellow",
-                                                           "minimal_top", "karaoke"}
+    assert {"clean", "bold_yellow", "minimal_top", "karaoke"} <= {
+        s["key"] for s in data["subtitle_styles"]}
+    # the modern presets are sampled in the same gallery (except clean, which
+    # the classic "Clean" entry already represents)
+    assert {f"preset_{p}" for p in ("cinema", "bold_social", "soft_card", "editorial")} <= {
+        s["key"] for s in data["subtitle_styles"]}
     assert {s["key"] for s in data["title_styles"]} == {"centered_fade",
                                                         "bottom_left_minimal", "bold_pop"}
     # a style that cannot render on this ffmpeg build is LISTED with an honest
