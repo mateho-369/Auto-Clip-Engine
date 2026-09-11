@@ -56,7 +56,7 @@ FONTS: dict[str, dict] = {
         "family": "Battambang", "label": "Battambang",
         "weights": {"regular": "Battambang-Regular.ttf", "bold": "Battambang-Bold.ttf"},
         "license": "OFL-Battambang.txt",
-        "note": "familiar Khmer body typeface",
+        "note": "classic Khmer body face — its subscript (ជើង) marks are tiny \'plus\' ticks by design; hard to read at caption size, prefer Noto/Kantumruy for long-form",
     },
     "kantumruy_pro": {
         "family": "Kantumruy Pro", "label": "Kantumruy Pro",
