@@ -148,7 +148,10 @@ PRESETS: dict[str, dict] = {
 # projects keep their look after the upgrade. ``karaoke`` maps to clean+karaoke.
 LEGACY_MAP: dict[str, dict] = {
     "clean": {},
-    "bold_yellow": {"font": "battambang", "weight": "bold", "size_pct": 5.0,
+    # kantumruy_pro bold, not battambang: Battambang's subscript (ជើង) marks are
+    # tiny plus-ticks by design and vanish at caption size (user-verified);
+    # kantumruy bold keeps the same loud look with legible subscripts.
+    "bold_yellow": {"font": "kantumruy_pro", "weight": "bold", "size_pct": 5.0,
                     "text_color": "#ffff00", "outline_px": 3.0},
     "minimal_top": {"position": "top", "size_pct": 3.8, "margin_v_pct": 4.5},
     "karaoke": {"karaoke": True, "text_color": "#ffff00"},
