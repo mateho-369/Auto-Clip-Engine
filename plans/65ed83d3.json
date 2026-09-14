@@ -1,0 +1,84 @@
+{
+  "title": "Trimmed",
+  "logline": "Auto-generated template plan for: why early birds win the day",
+  "mode": "standard",
+  "content_goal": "explain_one",
+  "sfx_enabled": true,
+  "scenes": [
+    {
+      "hook": "The Concept",
+      "script": "Stop scrolling — why early birds win the day is about to make total sense in the next few seconds.",
+      "sfx": "pop",
+      "sfx_time": 0.3,
+      "animation": "pop-in",
+      "transition": "fade",
+      "background": "gradient-violet",
+      "pose": "point_right",
+      "image": {
+        "needed": false,
+        "source": "web",
+        "query_or_prompt": "The Concept",
+        "position": "top",
+        "url": "",
+        "local_path": ""
+      },
+      "duration": 3.0
+    }
+  ],
+  "total_duration": 3.0,
+  "elapsed_sec": 0.08,
+  "activity": [
+    {
+      "role": "planner",
+      "label": "Planner / Director (Controller)",
+      "status": "fallback",
+      "model": "sailor2:8b",
+      "note": "Ollama offline — using built-in fallback",
+      "time": 1789392690.6
+    },
+    {
+      "role": "planner",
+      "label": "Planner / Director (Controller)",
+      "status": "fallback",
+      "model": null,
+      "note": "template plan generated (no AI available)",
+      "time": 1789392690.6
+    },
+    {
+      "role": "scriptwriter",
+      "label": "Scriptwriter",
+      "status": "fallback",
+      "model": "sailor2:8b",
+      "note": "Ollama offline — using built-in fallback",
+      "time": 1789392690.6
+    },
+    {
+      "role": "sfx_director",
+      "label": "SFX Director",
+      "status": "fallback",
+      "model": "qwen2.5:3b",
+      "note": "Ollama offline — using built-in fallback",
+      "time": 1789392690.6
+    },
+    {
+      "role": "animator",
+      "label": "Animator",
+      "status": "fallback",
+      "model": "sailor2:8b",
+      "note": "Ollama offline — using built-in fallback",
+      "time": 1789392690.6
+    },
+    {
+      "role": "qa",
+      "label": "QA Reviewer",
+      "status": "fallback",
+      "model": "qwen2.5:3b",
+      "note": "Ollama offline — using built-in fallback",
+      "time": 1789392690.6
+    }
+  ],
+  "idea": "why early birds win the day",
+  "id": "65ed83d3",
+  "character_id": "b7ef914c",
+  "created": 1789392690.701074
+}
