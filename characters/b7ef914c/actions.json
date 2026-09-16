@@ -1,0 +1,17 @@
+{
+  "idle": {
+    "path": "actions/idle.png",
+    "source": "uploaded",
+    "created": 1789392690.6170661
+  },
+  "point_right": {
+    "path": "actions/point_right.png",
+    "source": "generated",
+    "created": 1789392690.6695478
+  },
+  "explain": {
+    "path": "actions/explain.png",
+    "source": "generated",
+    "created": 1789392690.7007577
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "ollama_host": "http://127.0.0.1:11434",
+  "controller": "sailor2:8b",
+  "roles": {
+    "planner": {
+      "enabled": true,
+      "model": "sailor2:8b",
+      "temperature": 0.55
+    },
+    "scriptwriter": {
+      "enabled": true,
+      "model": "sailor2:8b",
+      "temperature": 0.85
+    },
+    "sfx_director": {
+      "enabled": true,
+      "model": "qwen2.5:3b",
+      "temperature": 0.4
+    },
+    "animator": {
+      "enabled": true,
+      "model": "sailor2:8b",
+      "temperature": 0.6
+    },
+    "qa": {
+      "enabled": true,
+      "model": "qwen2.5:3b",
+      "temperature": 0.3
+    }
+  }
+}

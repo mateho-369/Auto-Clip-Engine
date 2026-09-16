@@ -12,7 +12,13 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ai_creator.app import app, CHARACTERS, VOICES, PLANS_DIR, OUTPUTS_DIR, SFX_DIR, WORK_DIR  # noqa: E402
-from tests.test_creator_character import make_synthetic_face_photo  # noqa: E402
+
+# Import helper function from test_creator_character
+import importlib.util
+spec = importlib.util.spec_from_file_location("test_creator_character", os.path.join(os.path.dirname(__file__), "test_creator_character.py"))
+test_creator_character_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(test_creator_character_module)
+make_synthetic_face_photo = test_creator_character_module.make_synthetic_face_photo  # noqa: E402
 
 client = TestClient(app)
 
